@@ -17,6 +17,7 @@ object LanguageCompilerStatic {
     "html" -> HtmlClassCompiler,
     "java" -> JavaCompiler,
     "javascript" -> JavaScriptCompiler,
+    "kotlin" -> KotlinCompiler,
     "lua" -> LuaCompiler,
     "nim" -> NimCompiler,
     "perl" -> PerlCompiler,
