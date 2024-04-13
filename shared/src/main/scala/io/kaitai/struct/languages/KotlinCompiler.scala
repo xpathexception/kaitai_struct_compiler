@@ -26,14 +26,14 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   // Preprocess fromFileClass and make import
   val fromFileClass: String = {
-    val pos = config.java.fromFileClass.lastIndexOf('.')
+    val pos = config.kotlin.fromFileClass.lastIndexOf('.')
     if (pos < 0) {
       // If relative "fromFileClass", then just use it as is
-      config.java.fromFileClass
+      config.kotlin.fromFileClass
     } else {
       // If absolute "fromFileClass", add relevant import + use relative
-      importList.add(config.java.fromFileClass)
-      config.java.fromFileClass.substring(pos + 1)
+      importList.add(config.kotlin.fromFileClass)
+      config.kotlin.fromFileClass.substring(pos + 1)
     }
   }
 
@@ -52,33 +52,37 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def fileHeader(topClassName: String): Unit = {
     outHeader.puts(s"// $headerComment")
-    if (config.java.javaPackage.nonEmpty) {
-      outHeader.puts
-      outHeader.puts(s"package ${config.java.javaPackage}")
-    }
 
     // Used in every class
     importList.add(s"io.kaitai.struct.$kstructName")
     importList.add(s"io.kaitai.struct.$kstreamName")
 
+    if (config.java.javaPackage.nonEmpty) {
+      outHeader.puts
+      outHeader.puts(s"package ${config.java.javaPackage}")
+    }
+
     out.puts
   }
 
   override def classHeader(name: String): Unit = {
+    if (KtConfig.useDefaultConstructor) return
+
     val typeDescStr = if (out.indentLevel > 0) {
       "class "
     } else {
       "class "
     }
 
+    out.puts(s"/* clzzHead, name=$name, t=${type2class(name)} */")
     out.puts(s"${typeDescStr}${type2class(name)} : $kstructName {")
     out.inc
 
     if (config.readStoresPos) {
-      out.puts("val _attrStart = mutableMapOf<String, Int>()")
-      out.puts("val _attrEnd = mutableMapOf<String, Int>()")
-      out.puts("val _arrStart = mutableMapOf<String, ArrayList<Int>>()")
-      out.puts("val _arrEnd = mutableMapOf<String, ArrayList<Int>>()")
+      out.puts("val _attrStart = mutableMapOf<String, Long>()")
+      out.puts("val _attrEnd = mutableMapOf<String, Long>()")
+      out.puts("val _arrStart = mutableMapOf<String, ArrayList<Long>>()")
+      out.puts("val _arrEnd = mutableMapOf<String, ArrayList<Long>>()")
       out.puts
     }
   }
@@ -93,10 +97,10 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     // they require endianness to be parsed anyway
     if (
       !isInheritedEndian &&
-        config.java.fromFileClass.nonEmpty &&
+        config.kotlin.fromFileClass.nonEmpty &&
         typeProvider.nowClass.params.isEmpty
     ) {
-      out.puts(s"companion object /* 1 */ {")
+      out.puts(s"companion object {")
       out.inc
 
       out.puts(s"fun fromFile(fileName: String): ${type2class(name)} {")
@@ -112,6 +116,71 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     super.classFooter(name)
   }
 
+  def defaultClassConstructor(
+    name: String,
+    parentType: DataType,
+    rootClassName: String,
+    isHybrid: Boolean,
+    params: List[ParamDefSpec]
+  ): Unit = {
+    val isNested = out.indentLevel > 0
+
+    val selfClassTypeName = type2class(name)
+    val parentClassTypeName = kaitaiType2KotlinType(parentType)
+    val rootClassTypeName = type2class(rootClassName)
+
+    val overrideRootCtor = if (isNested) "override val " else ""
+    val treeClassTypeName = if (isNested) {
+      importList.add(s"io.kaitai.struct.${KotlinCompiler.kstructTreeChildName}")
+      KotlinCompiler.kstructTreeChildName
+    } else {
+      importList.add(s"io.kaitai.struct.${KotlinCompiler.kstructTreeRootName}")
+      KotlinCompiler.kstructTreeRootName
+    }
+
+    val hasLeVar = typeProvider.nowClass.meta.endian match {
+      case Some(_: CalcEndian) | Some(InheritedEndian) => true
+      case _ => false
+    }
+
+    val paramsArg = Utils.join(params.map((p) =>
+      s"${paramName(p.id)}: ${kaitaiType2KotlinType(p.dataType)}"
+    ), "", ",\n", ",")
+
+    importList.add("kotlin.jvm.JvmOverloads")
+    out.puts(s"class $selfClassTypeName @JvmOverloads constructor (")
+
+    out.inc
+    out.puts(s"_io: $kstreamName,")
+    out.puts(s"override val _parent: $parentClassTypeName? = null,")
+    out.puts(s"${overrideRootCtor}_root: $rootClassTypeName? = null,")
+    if (hasLeVar) out.puts("private var _is_le: Boolean? = null,")
+    if (params.nonEmpty) out.puts(paramsArg)
+    out.dec
+
+    out.puts(s") : $kstructName(_io), $treeClassTypeName<$rootClassTypeName> {")
+    out.inc
+
+    if (!isHybrid) {
+      if (name == rootClassName) {
+        out.puts(s"override val _root: $rootClassTypeName = _root ?: this")
+        out.puts
+      } else {
+        out.puts("// todo: this._root = _root")
+      }
+    }
+
+    if (config.readStoresPos) {
+      debugClassSequenceRender(typeProvider.nowClass.seq)
+
+      out.puts("val _attrStart = mutableMapOf<String, Long>()")
+      out.puts("val _attrEnd = mutableMapOf<String, Long>()")
+      out.puts("val _arrStart = mutableMapOf<String, ArrayList<Long>>()")
+      out.puts("val _arrEnd = mutableMapOf<String, ArrayList<Long>>()")
+      out.puts
+    }
+  }
+
   override def classConstructorHeader(
     name: String,
     parentType: DataType,
@@ -119,6 +188,12 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     isHybrid: Boolean,
     params: List[ParamDefSpec]
   ): Unit = {
+    if (KtConfig.useDefaultConstructor) {
+      defaultClassConstructor(name, parentType, rootClassName, isHybrid, params)
+      return
+    }
+
+    out.puts(s"/* ctorHead, name=$name, parent=$parentType, root=$rootClassName, hybrid=$isHybrid */")
     val hasLeVar = typeProvider.nowClass.meta.endian match {
       case Some(_: CalcEndian) | Some(InheritedEndian) =>
         out.puts("private var _is_le: Boolean? = null")
@@ -135,7 +210,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts("constructor(")
     out.inc
     out.puts(s"_io: $kstreamName,")
-    out.puts(s"_parent: ${kaitaiType2KotlinType(parentType)},")
+    out.puts(s"_parent: ${kaitaiType2KotlinType(parentType)}? = null,")
     out.puts(s"_root: ${type2class(rootClassName)}? = null,")
     if (hasLeVar) out.puts(s"_is_le: Boolean? = null,")
     if (params.nonEmpty) out.puts(paramsArg)
@@ -159,6 +234,10 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     params.foreach((p) => handleAssignmentSimple(p.id, paramName(p.id)))
   }
 
+  override def classConstructorFooter: Unit = {
+    if (!KtConfig.useDefaultConstructor) super.classConstructorFooter
+  }
+
   override def readHeader(endian: Option[FixedEndian], isEmpty: Boolean) = {
     val readAccessAndType = if (!config.autoRead) "" else "private "
 
@@ -173,8 +252,15 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def readFooter(): Unit = universalFooter
 
-  override def runRead(name: List[String]): Unit =
-    out.puts("_read()")
+  override def runRead(name: List[String]): Unit = {
+    if (KtConfig.useDefaultConstructor) {
+      out.puts("init { _read() }")
+      out.puts
+    }
+    else {
+      out.puts("_read()")
+    }
+  }
 
   override def runReadCalc(): Unit = {
     out.puts("when (_is_le) {")
@@ -193,7 +279,38 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     attrType: DataType,
     isNullable: Boolean
   ): Unit = {
-    out.puts(s"private var ${idToStr(attrName)}: ${kaitaiType2KotlinType(attrType, isNullable)}")
+    if (KtConfig.omitSpecialAttributes & attrName.isInstanceOf[SpecialIdentifier]) {
+      out.puts(s"/* attrDecl [$attrName] */")
+      return
+    }
+
+    val resolvedName = idToStr(attrName)
+
+    if (KtConfig.avoidNullInitialization) {
+      val isComplex = attrType match {
+        case _: ComplexDataType | _: BytesType | _: StrType => true
+        case _ => false
+      }
+
+      val plainType = kaitaiType2KotlinType(attrType)
+      val (prefix, suffix) = (isComplex, isNullable) match {
+        case (false, false) => {
+          importList.add("kotlin.properties.Delegates")
+          ("", s"by Delegates.notNull<$plainType>()")
+        }
+        case (false, true) => ("", "= null")
+        case (true, false) => ("lateinit ", "")
+        case (true, true) => ("", "= null")
+      }
+
+      out.puts(s"/* attrDecl */ ${prefix}var $resolvedName: ${kaitaiType2KotlinType(attrType, isNullable)} $suffix; private set")
+    } else {
+      if (isNullable) {
+        out.puts(s"/* attrDecl */ var $resolvedName: ${kaitaiType2KotlinType(attrType, isNullable)} = null; private set")
+      } else {
+        out.puts(s"/* attrDecl */ lateinit var $resolvedName: ${kaitaiType2KotlinType(attrType, isNullable)} private set")
+      }
+    }
   }
 
   override def attributeReader(
@@ -201,7 +318,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     attrType: DataType,
     isNullable: Boolean
   ): Unit = {
-    out.puts(s"fun ${idToStr(attrName)}(): ${kaitaiType2KotlinType(attrType, isNullable)} = ${idToStr(attrName)}")
+    //out.puts(s"/* attrRead */ fun ${idToStr(attrName)}(): ${kaitaiType2KotlinType(attrType, isNullable)} = ${idToStr(attrName)}")
   }
 
   override def universalDoc(doc: DocSpec): Unit = {
@@ -240,7 +357,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     val memberName = idToStr(varName)
     rep match {
       case NoRepeat => memberName
-      case _ => s"$memberName.get($memberName.size() - 1)"
+      case _ => s"$memberName[($memberName.size - 1]"
     }
   }
 
@@ -290,8 +407,8 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       case _ => getRawIdExpr(varName, rep)
     }
 
-    importList.add("io.kaitai.struct.ByteBufferKaitaiStream")
-    out.puts(s"$kstreamName $ioName = new ByteBufferKaitaiStream($args)")
+    importList.add("io.kaitai.struct.OkioKaitaiStream")
+    out.puts(s"val $ioName: $kstreamName = OkioKaitaiStream($args)")
     ioName
   }
 
@@ -300,14 +417,28 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     "io"
   }
 
-  override def pushPos(io: String): Unit =
-    out.puts(s"val _pos: Long = $io.pos()")
+  override def pushPos(io: String): Unit = {
+    if (!KtConfig.useLookupAt) out.puts(s"val _pos: Long = $io.pos")
+  }
 
-  override def seek(io: String, pos: Ast.expr): Unit =
-    out.puts(s"$io.seek(${expression(pos)})")
+  override def seek(io: String, pos: Ast.expr): Unit = {
+    if (KtConfig.useLookupAt) {
+      importList.add("io.kaitai.struct.lookupAt")
+      out.puts(s"$io.lookupAt(${expression(pos)}) {")
+    } else {
+      out.puts(s"run { $io.seek(${expression(pos)}) }.let {")
+    }
+    out.inc
+  }
 
-  override def popPos(io: String): Unit =
-    out.puts(s"$io.seek(_pos)")
+  override def popPos(io: String): Unit = {
+    out.dec
+    if (KtConfig.useLookupAt) {
+      out.puts("}")
+    } else {
+      out.puts(s"}.also { $io.seek(_pos) }")
+    }
+  }
 
   override def alignToByte(io: String): Unit =
     out.puts(s"$io.alignToByte()")
@@ -318,7 +449,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts("run {")
     out.inc
     out.puts(s"val _posList = $listName.getOrPut(\"$varName\") { arrayListOf() }")
-    out.puts(s"_posList.add($io.pos())")
+    out.puts(s"_posList.add($io.pos)")
     out.dec
     out.puts("}")
   }
@@ -333,7 +464,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       val name = idToStr(attrId)
       rep match {
         case NoRepeat =>
-          out.puts(s"_attrStart[\"$name\"] = $io.pos()")
+          out.puts(s"_attrStart[\"$name\"] = $io.pos")
         case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
           getOrCreatePosList("_arrStart", name, io)
       }
@@ -353,7 +484,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     val name = idToStr(attrId)
     rep match {
       case NoRepeat =>
-        out.puts(s"_attrEnd[\"$name\"] = $io.pos()")
+        out.puts(s"_attrEnd[\"$name\"] = $io.pos")
       case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
         getOrCreatePosList("_arrEnd", name, io)
     }
@@ -369,10 +500,15 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def condRepeatEosHeader(id: Identifier, io: String, dataType: DataType): Unit = {
-    out.puts("{")
+    importList.add("io.kaitai.struct.doWhileWithIndex")
+    out.puts("doWhileWithIndex(")
+
     out.inc
-    out.puts("var i: Int = 0")
-    out.puts(s"while (!$io.isEof()) {")
+    out.puts("initialIndex = 0,")
+    out.puts(s"condition = { i -> !$io.isEof },")
+    out.dec
+
+    out.puts(") { i ->")
     out.inc
   }
 
@@ -381,9 +517,6 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def condRepeatEosFooter: Unit = {
-    out.puts("i++")
-    out.dec
-    out.puts("}")
     out.dec
     out.puts("}")
   }
@@ -396,8 +529,6 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   ): Unit = {
     out.puts(s"for (i in 0 until ${expression(repeatExpr)}) {")
     out.inc
-
-    //importList.add("java.util.ArrayList")
   }
 
   override def handleAssignmentRepeatExpr(id: Identifier, expr: String): Unit =
@@ -409,14 +540,17 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     dataType: DataType,
     untilExpr: expr
   ): Unit = {
-    out.puts("{")
-    out.inc
-    out.puts(s"var ${translator.doName("_")}: ${kaitaiType2KotlinType(dataType)}")
-    out.puts("var i: Int = 0")
-    out.puts("do {")
-    out.inc
+    importList.add("io.kaitai.struct.doWhileWithIndex")
+    out.puts("doWhileWithIndex(")
+    typeProvider._currentIteratorType = Some(dataType)
 
-    //importList.add("java.util.ArrayList")
+    out.inc
+    out.puts("initialIndex = 0,")
+    out.puts(s"condition = { i, ${translator.doName("_")} -> !(${expression(untilExpr)}) },")
+    out.dec
+
+    out.puts(") { i ->")
+    out.inc
   }
 
   override def handleAssignmentRepeatUntil(id: Identifier, expr: String, isRaw: Boolean): Unit = {
@@ -425,21 +559,24 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     } else {
       ("", translator.doName(Identifier.ITERATOR))
     }
-    out.puts(s"var $tempVar: $typeDecl = $expr")
-    out.puts(s"${privateMemberName(id)}.add($tempVar)")
+    out.puts(s"($expr).also(${privateMemberName(id)}::add)")
   }
 
   override def condRepeatUntilFooter(id: Identifier, io: String, dataType: DataType, untilExpr: expr): Unit = {
-    typeProvider._currentIteratorType = Some(dataType)
-    out.puts("i++")
-    out.dec
-    out.puts(s"} while (!(${expression(untilExpr)}))")
     out.dec
     out.puts("}")
   }
 
-  override def handleAssignmentSimple(id: Identifier, expr: String): Unit =
-    out.puts(s"${privateMemberName(id)} = $expr")
+  override def handleAssignmentSimple(id: Identifier, expr: String): Unit = {
+    if (KtConfig.returnFromSwitch) {
+      typeProvider._currentSwitchType match {
+        case Some(_) => out.puts(s"$expr")
+        case None => out.puts(s"${privateMemberName(id)} = $expr")
+      }
+    } else {
+      out.puts(s"${privateMemberName(id)} = $expr")
+    }
+  }
 
   override def handleAssignmentTempVar(dataType: DataType, id: String, expr: String): Unit =
     out.puts(s"var $id: ${kaitaiType2KotlinType(dataType)} = $expr")
@@ -465,9 +602,9 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       case _: BytesEosType =>
         s"$io.readBytesFull()"
       case BytesTerminatedType(terminator, include, consume, eosError, _) =>
-        s"$io.readBytesTerm((byte) $terminator, $include, $consume, $eosError)"
+        s"$io.readBytesTerm($terminator, $include, $consume, $eosError)"
       case BitsType1(bitEndian) =>
-        s"$io.readBitsInt${Utils.upperCamelCase(bitEndian.toSuffix)}(1) != 0"
+        s"$io.readBitsInt${Utils.upperCamelCase(bitEndian.toSuffix)}(1) != 0L"
       case BitsType(width: Int, bitEndian) =>
         s"$io.readBitsInt${Utils.upperCamelCase(bitEndian.toSuffix)}($width)"
       case t: UserType =>
@@ -490,7 +627,10 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     }
 
     if (assignType != dataType) {
-      s"(${kaitaiType2KotlinType(assignType)}) ($expr)"
+      assignType match {
+        case _: NumericType => s"($expr).to${kaitaiType2KotlinType(assignType)}()"
+        case _ => expr
+      }
     } else {
       expr
     }
@@ -504,7 +644,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     defEndian: Option[FixedEndian]
   ): String = {
     val ioName = idToStr(IoStorageIdentifier(id))
-    handleAssignmentTempVar(KaitaiStreamType, ioName, s"$io.substream(${translator.translate(blt.size)})")
+    handleAssignmentTempVar(KaitaiStreamType, ioName, s"$io.substream(${translator.translate(blt.size)}.toLong())")
     ioName
   }
 
@@ -542,7 +682,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def userTypeDebugRead(id: String, dataType: DataType, assignType: DataType): Unit = {
     val expr = if (assignType != dataType) {
-      s"((${kaitaiType2KotlinType(dataType)}) ($id))"
+      s"((${kaitaiType2KotlinType(dataType)}) ($id)) /* fixme-2 */"
     } else {
       id
     }
@@ -556,13 +696,53 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     normalCaseProc: T => Unit,
     elseCaseProc: T => Unit
   ): Unit = {
-    // Java has a stupid limitation of being unable to match nulls in switch.
-    // If our type is nullable, we'll do an extra check. For now, we're only
-    // doing this workaround for enums.
+    val someNormalCases = cases.exists { case (caseExpr, _) =>
+      caseExpr != SwitchType.ELSE_CONST
+    }
 
-    // todo: may be fine in Kotlin
+    if (someNormalCases) {
+      switchStart(id, on)
 
-    super.switchCasesRender(id, on, cases, normalCaseProc, elseCaseProc)
+      // Pass 1: only normal case clauses
+      var first = true
+
+      cases.foreach { case (condition, result) =>
+        condition match {
+          case SwitchType.ELSE_CONST =>
+          // skip for now
+          case _ =>
+            if (first) {
+              switchCaseFirstStart(condition)
+              first = false
+            } else {
+              switchCaseStart(condition)
+            }
+            out.puts(s" /* case: $result */ ")
+            normalCaseProc(result)
+            switchCaseEnd()
+        }
+      }
+
+      val hasElse = cases.exists { case (caseExpr, _) =>
+        caseExpr == SwitchType.ELSE_CONST
+      }
+      if (hasElse) {
+        out.puts(s" /* someElse -> $on */ ")
+        cases.get(SwitchType.ELSE_CONST).foreach { (result) =>
+          switchElseStart()
+          elseCaseProc(result)
+          switchElseEnd()
+        }
+      } else {
+        out.puts(s" /* noneElse -> $on */ ")
+      }
+
+      switchEnd()
+    } else {
+      cases.get(SwitchType.ELSE_CONST).foreach { (result) =>
+        elseCaseProc(result)
+      }
+    }
   }
 
   def value2Const(s: String) = Utils.upperUnderscoreCase(s)
@@ -576,24 +756,22 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   val NAME_SWITCH_ON = Ast.expr.Name(Ast.identifier(Identifier.SWITCH_ON))
 
-  override def switchStart(id: Identifier, on: Ast.expr): Unit =
-    out.puts(s"when (${expression(on)}) {")
+  override def switchStart(id: Identifier, on: Ast.expr): Unit = {
+    if (KtConfig.returnFromSwitch) {
+      val onType = translator.detectType(on)
+      typeProvider._currentSwitchType = Some(onType)
+
+      out.puts(s"${translator.doInternalName(id)} = when (${expression(on)}) /* ontype=$onType */ {")
+    } else {
+      out.puts(s"val res_${translator.doInternalName(id)} = when (${expression(on)}) {")
+    }
+    out.inc
+  }
 
   override def switchCaseFirstStart(condition: Ast.expr): Unit = switchCaseStart(condition)
 
   override def switchCaseStart(condition: Ast.expr): Unit = {
-    // Java is very specific about what can be used as "condition" in "case
-    // condition:".
-    val condStr = condition match {
-      case enumByLabel: Ast.expr.EnumByLabel =>
-        // If switch is over a enum, only literal enum values are supported,
-        // and they must be written as "MEMBER", not "SomeEnum.MEMBER".
-        value2Const(enumByLabel.label.name)
-      case _ =>
-        expression(condition)
-    }
-
-    out.puts(s"$condStr -> {")
+    out.puts(s"${expression(condition)} -> {")
     out.inc
   }
 
@@ -608,7 +786,11 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def switchEnd(): Unit = {
+    out.dec
     out.puts("}")
+    if (KtConfig.returnFromSwitch) {
+      typeProvider._currentSwitchType = None
+    }
   }
 
   //</editor-fold>
@@ -662,8 +844,40 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     attrType: DataType,
     isNullable: Boolean
   ): Unit = {
-    val suffix = if (isNullable) "?" else ""
-    out.puts(s"var ${idToStr(attrName)}: ${kaitaiType2KotlinType(attrType)}$suffix")
+    val renderNullable = isNullable | KtConfig.enforceInstanceNullability
+    val suffix = if (renderNullable) "?" else ""
+
+    val kotlinType = kaitaiType2KotlinType(attrType)
+    val resultType = if (kotlinType.isEmpty || !KtConfig.explicitInstanceType) {
+      ""
+    } else {
+      if (!(renderNullable ^ KtConfig.explicitInstanceNull)) s" : ${kotlinType}$suffix " else ""
+    }
+
+    val isLazy = try {
+      Some(typeProvider.isLazy(attrName.name))
+    } catch {
+      case _: Throwable => None
+    }
+
+    out.puts(s"/* instDecl, l = $isLazy */ val ${idToStr(attrName)}$resultType by lazy {")
+    out.inc
+    out.puts(s"/* instDecl, l = $isLazy $attrName, $attrType, $isNullable (renderNull = $renderNullable)*/")
+  }
+
+  override def condIfSetNull(instName: Identifier): Unit = {
+    out.puts(" /* ifSetNul */")
+    super.condIfSetNull(instName)
+  }
+
+  override def condIfSetNonNull(instName: Identifier): Unit = {
+    out.puts(" /* ifSetNoN */")
+    super.condIfSetNonNull(instName)
+  }
+
+  override def switchElseEnd(): Unit = {
+    out.puts(" /* switElEn */")
+    super.switchElseEnd()
   }
 
   override def instanceHeader(
@@ -672,44 +886,46 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     dataType: DataType,
     isNullable: Boolean
   ): Unit = {
-    val suffix = if (isNullable) "?" else ""
-    out.puts(s"fun ${idToStr(instName)}(): ${kaitaiType2KotlinType(dataType)}$suffix {")
-    out.inc
+    //    val suffix = if (isNullable) "?" else ""
+    //    out.puts(s"fun ${idToStr(instName)}(): ${kaitaiType2KotlinType(dataType)}$suffix {")
+    //    out.inc
   }
 
   override def instanceCheckCacheAndReturn(
     instName: InstanceIdentifier,
     dataType: DataType
   ): Unit = {
-    out.puts(s"if (${privateMemberName(instName)} != null)")
-    out.inc
-    instanceReturn(instName, dataType)
-    out.dec
+    //    out.puts(s"if (${privateMemberName(instName)} != null)")
+    //    out.inc
+    //    instanceReturn(instName, dataType)
+    //    out.dec
   }
+
+  override def instanceCalculate(instName: Identifier, dataType: DataType, value: expr): Unit = {
+    out.puts(s"/* instCalc t=$dataType*/ ")
+    out.puts(s"/* $value */ ")
+    out.puts(expression(value))
+
+    //fixme: lazy should return default null
+    //super.instanceCalculate(instName, dataType, value)
+  }
+
+  override def instanceSetCalculated(instName: InstanceIdentifier): Unit = {}
 
   override def instanceReturn(
     instName: InstanceIdentifier,
     attrType: DataType
-  ): Unit = {
-    out.puts(s"return ${privateMemberName(instName)}")
-  }
+  ): Unit = {}
 
-  //  override def instanceCalculate(instName: Identifier, dataType: DataType, value: expr): Unit = {
-  //    val primType = kaitaiType2KotlinType(dataType)
-  //    val boxedType = kaitaiType2KotlinType(dataType)
-  //
-  //    if (primType != boxedType) {
-  //      // Special trick to achieve both implicit type conversion + boxing.
-  //      // Unfortunately, Java can't do both in one assignment, i.e. this would fail:
-  //      //
-  //      // Double c = 1.0f + 1;
-  //
-  //      out.puts(s"var _tmp: $primType = ${expression(value)} aserty $primType")
-  //      out.puts(s"${privateMemberName(instName)} = _tmp")
-  //    } else {
-  //      out.puts(s"${privateMemberName(instName)} = ${expression(value)}")
-  //    }
-  //  }
+  def instanceReturn(
+    instName: InstanceIdentifier,
+    attrType: DataType,
+    isNullable: Boolean
+  ): Unit = {
+    out.puts(s"/* instRetn nullable=$isNullable*/ ")
+    if (isNullable) out.puts("else null")
+    //out.puts(s"/* instRetn */ return ${privateMemberName(instName)}")
+  }
 
   override def enumDeclaration(curClass: String, enumName: String, enumColl: Seq[(Long, String)]): Unit = {
     val enumClass = type2class(enumName)
@@ -735,16 +951,20 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
     out.puts(s"private val byId: Map<Long, $enumClass> = entries.associateBy { it.id }")
     out.puts
-
     out.puts(s"fun byId(id: Long): $enumClass = byId.getValue(id)")
+
     out.dec
     out.puts("}")
 
-    //importList.add("java.util.Map")
-    //importList.add("java.util.HashMap")
+    out.dec
+    out.puts("}")
   }
 
   override def debugClassSequence(seq: List[AttrSpec]) = {
+    if (!KtConfig.useDefaultConstructor) debugClassSequenceRender(seq)
+  }
+
+  def debugClassSequenceRender(seq: List[AttrSpec]) = {
     val seqStr = seq.map((attr) => "\"" + idToStr(attr.id) + "\"").mkString(", ")
     out.puts(s"val _seqFields: Array<String> = arrayOf($seqStr)")
     out.puts
@@ -761,14 +981,14 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def idToStr(id: Identifier): String = KotlinCompiler.idToStr(id)
 
-  override def publicMemberName(id: Identifier) = KotlinCompiler.publicMemberName(id)
+  override def publicMemberName(id: Identifier) = "/* publMemb */ " + KotlinCompiler.publicMemberName(id)
 
-  override def privateMemberName(id: Identifier): String = s"this.${idToStr(id)}"
+  override def privateMemberName(id: Identifier): String = s"/* privMemb */ this.${idToStr(id)}"
 
   override def localTemporaryName(id: Identifier): String = s"_t_${idToStr(id)}"
 
   override def ksErrorName(err: KSError): String = err match {
-    case EndOfStreamError => config.java.endOfStreamErrorClass
+    case EndOfStreamError => config.kotlin.endOfStreamErrorClass
     case ConversionError => "NumberFormatException"
     case _ => s"KaitaiStream.${err.name}"
   }
@@ -797,13 +1017,17 @@ object KotlinCompiler extends LanguageCompilerStatic
     config: RuntimeConfig
   ): LanguageCompiler = new KotlinCompiler(tp, config)
 
-  def idToStr(id: Identifier): String = id match {
-    case SpecialIdentifier(name) => name
-    case NamedIdentifier(name) => Utils.lowerCamelCase(name)
-    case NumberedIdentifier(idx) => s"_${NumberedIdentifier.TEMPLATE}$idx"
-    case InstanceIdentifier(name) => Utils.lowerCamelCase(name)
-    case RawIdentifier(innerId) => s"_raw_${idToStr(innerId)}"
-    case IoStorageIdentifier(innerId) => s"_io_${idToStr(innerId)}"
+  def idToStr(id: Identifier): String = {
+    val name = id match {
+      case SpecialIdentifier(name) => name
+      case NamedIdentifier(name) => Utils.lowerCamelCase(name)
+      case NumberedIdentifier(idx) => s"_${NumberedIdentifier.TEMPLATE}$idx"
+      case InstanceIdentifier(name) => Utils.lowerCamelCase(name)
+      case RawIdentifier(innerId) => s"_raw_${idToStr(innerId)}"
+      case IoStorageIdentifier(innerId) => s"_io_${idToStr(innerId)}"
+    }
+
+    if (name == "val") "`val`" else name
   }
 
   def publicMemberName(id: Identifier) = idToStr(id)
@@ -820,15 +1044,15 @@ object KotlinCompiler extends LanguageCompilerStatic
 
   def kaitaiType2KotlinType(attrType: DataType): String = {
     attrType match {
-      case Int1Type(false) => "Int"
-      case IntMultiType(false, Width2, _) => "Int"
-      case IntMultiType(false, Width4, _) => "Long"
-      case IntMultiType(false, Width8, _) => "Long"
+      case Int1Type(false) => s"Int"
+      case IntMultiType(false, Width2, _) => s"Int"
+      case IntMultiType(false, Width4, _) => s"Long"
+      case IntMultiType(false, Width8, _) => s"Long"
 
-      case Int1Type(true) => "Byte"
-      case IntMultiType(true, Width2, _) => "Short"
-      case IntMultiType(true, Width4, _) => "Int"
-      case IntMultiType(true, Width8, _) => "Long"
+      case Int1Type(true) => s"Byte"
+      case IntMultiType(true, Width2, _) => s"Short"
+      case IntMultiType(true, Width4, _) => s"Int"
+      case IntMultiType(true, Width8, _) => s"Long"
 
       case FloatMultiType(Width4, _) => "Float"
       case FloatMultiType(Width8, _) => "Double"
@@ -846,11 +1070,11 @@ object KotlinCompiler extends LanguageCompilerStatic
       case KaitaiStreamType | OwnedKaitaiStreamType => kstreamName
       case KaitaiStructType | CalcKaitaiStructType(_) => kstructName
 
-      case t: UserType => types2class(t.name)
+      case t: UserType => types2class(t.name) + s" /* user $t*/ "
       case EnumType(name, _) => types2class(name)
 
-      case ArrayTypeInStream(inType) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 1 */"
-      case CalcArrayType(inType, _) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 2 */"
+      case ArrayTypeInStream(inType) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 1 */ "
+      case CalcArrayType(inType, _) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 2 */ "
 
       case st: SwitchType => kaitaiType2KotlinType(st.combinedType)
     }
@@ -859,4 +1083,31 @@ object KotlinCompiler extends LanguageCompilerStatic
   override def kstreamName: String = "KaitaiStream"
 
   override def kstructName: String = "KaitaiStruct"
+
+  def kstructTreeRootName: String = "StructRoot"
+
+  def kstructTreeChildName: String = "StructChild"
+}
+
+//todo: ValidFailInst
+//todo: ValidShort
+//todo: CastToTop
+//todo: CastNested
+//todo: IndexToParamEos
+//todo: IndexToParamUntil
+//todo: NavParentRecursive
+//todo: NavParent2
+//todo: DebugSwitchUser
+object KtConfig {
+  val useLookupAt = true
+  val useDefaultConstructor = true
+  val returnFromSwitch = true
+  val omitSpecialAttributes = true
+
+  val enforceInstanceNullability = true
+
+  val explicitInstanceNull = false
+  val avoidNullInitialization = true
+  val returnNullByDefault = true
+  val explicitInstanceType = true
 }

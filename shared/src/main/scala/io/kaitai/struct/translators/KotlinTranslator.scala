@@ -4,11 +4,40 @@ import io.kaitai.struct.datatype.DataType
 import io.kaitai.struct.datatype.DataType.{EnumType, IntType}
 import io.kaitai.struct.exprlang.Ast
 import io.kaitai.struct.exprlang.Ast.expr
+import io.kaitai.struct.exprlang.Ast.expr.IntNum
 import io.kaitai.struct.format.Identifier
 import io.kaitai.struct.languages.KotlinCompiler
 import io.kaitai.struct.{ImportList, Utils}
 
 class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends BaseTranslator(provider) {
+  override def userTypeField(userType: DataType.UserType, value: expr, attrName: String): String = {
+    s"${translate(value, METHOD_PRECEDENCE)}?.${doName(attrName)} /* userType=$userType, val=$value */"
+    //super.userTypeField(userType, value, attrName)
+  }
+
+  override def doNumericCompareOp(left: expr, op: Ast.cmpop, right: expr): String = {
+    val leftType = detectType(left)
+    val rightType = detectType(right)
+
+    val isLeftLiteral = left.isInstanceOf[IntNum]
+    val isRightLiteral = right.isInstanceOf[IntNum]
+    val hasOneLiteral = isLeftLiteral ^ isRightLiteral
+
+    if (leftType == rightType || !hasOneLiteral) {
+      s"${translate(left)} ${cmpOp(op)} ${translate(right)} /* [$left]${detectType(left)} ~ [$right]${detectType(right)} */ " //orig
+    } else {
+      val commonType = TypeDetector.combineTypes(leftType, rightType)
+
+      val (leftCast, rightCast) = if (isLeftLiteral) {
+        (s".to${KotlinCompiler.kaitaiType2KotlinType(commonType)}()", "")
+      } else {
+        ("", s".to${KotlinCompiler.kaitaiType2KotlinType(commonType)}()")
+      }
+
+      s"${translate(left)}$leftCast ${cmpOp(op)} ${translate(right)}$rightCast /* castCust [$leftType ~ $rightType]*/ "
+    }
+  }
+
   override def doIntLiteral(n: BigInt): String = {
     // TODO: Convert real big numbers to BigInteger
     val literal = if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
@@ -24,17 +53,21 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
   override def doArrayLiteral(t: DataType, value: Seq[expr]): String = {
     val kotlinType = KotlinCompiler.kaitaiType2KotlinType(t)
     val commaStr = value.map(v => translate(v)).mkString(", ")
+    val typeSpec = if (kotlinType.isEmpty) "" else s"<$kotlinType>"
 
-    s"arrayListOf<$kotlinType>($commaStr)"
+    s"arrayListOf$typeSpec($commaStr)"
   }
 
-  override def doByteArrayLiteral(arr: Seq[Byte]): String = s"byteArrayOf(${arr.mkString(", ")})"
+  override def doByteArrayLiteral(arr: Seq[Byte]): String = {
+    s"byteArrayOf(${arr.mkString("(", ").toByte(), (", ").toByte()")})"
+  }
 
-  override def doByteArrayNonLiteral(elts: Seq[expr]): String =
-    s"byteArrayOf(${elts.map(translate).mkString(", ")})"
+  override def doByteArrayNonLiteral(elts: Seq[expr]): String = {
+    s"byteArrayOf(${elts.map(translate).mkString("(", ").toByte(), (", ").toByte()")}) /* elts: $elts */"
+  }
 
   override def doIfExp(condition: Ast.expr, ifTrue: Ast.expr, ifFalse: Ast.expr): String = {
-    s"if (${translate(condition)}) ${translate(ifTrue)} else ${translate(ifFalse)}"
+    s"(if (${translate(condition)}) ${translate(ifTrue)} else ${translate(ifFalse)})"
   }
 
   override def doName(s: String) = s match {
@@ -42,26 +75,35 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
     case Identifier.ITERATOR2 => "_buf"
     case Identifier.SWITCH_ON => "on"
     case Identifier.INDEX => "i"
-    case _ => s"${Utils.lowerCamelCase(s)}()"
+    case _ => s"${Utils.lowerCamelCase(s)}"
   }
 
-  override def doInternalName(id: Identifier): String = s"${KotlinCompiler.publicMemberName(id)}()"
+  override def doInternalName(id: Identifier): String = {
+    s"${KotlinCompiler.publicMemberName(id)}"
+  }
 
-  override def doEnumByLabel(enumTypeAbs: List[String], label: String): String =
+  override def doEnumByLabel(enumTypeAbs: List[String], label: String): String = {
     s"${enumClass(enumTypeAbs)}.${Utils.upperUnderscoreCase(label)}"
+  }
 
-  override def doEnumById(enumTypeAbs: List[String], id: String): String =
-    s"${enumClass(enumTypeAbs)}.byId($id)"
+  override def doEnumById(enumTypeAbs: List[String], id: String): String = {
+    s"${enumClass(enumTypeAbs)}.byId($id.toLong())"
+  }
 
   def enumClass(enumTypeAbs: List[String]): String = {
     val enumTypeRel = Utils.relClass(enumTypeAbs, provider.nowClass.name)
     enumTypeRel.map((x) => Utils.upperCamelCase(x)).mkString(".")
   }
 
-  override def genericBinOp(left: Ast.expr, op: Ast.operator, right: Ast.expr, extPrec: Int) = {
+  override def genericBinOp(
+    left: Ast.expr,
+    op: Ast.operator,
+    right: Ast.expr,
+    extPrec: Int
+  ) = {
     (detectType(left), detectType(right), op) match {
       case (_: IntType, _: IntType, Ast.operator.Mod) =>
-        s"${KotlinCompiler.kstreamName}.mod(${translate(left)}, ${translate(right)})"
+        s"(${translate(left)}).mod(${translate(right)})"
       case _ =>
         super.genericBinOp(left, op, right, extPrec)
     }
@@ -87,60 +129,94 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
     }
   }
 
-  override def arraySubscript(container: expr, idx: expr): String =
+  override def arraySubscript(container: expr, idx: expr): String = {
     s"${translate(container)}.get(${translate(idx, METHOD_PRECEDENCE)}.toInt())"
+  }
 
   override def doCast(value: Ast.expr, typeName: DataType): String = typeName match {
     case _: IntType => s"(${translate(value)}).to${KotlinCompiler.kaitaiType2KotlinType(typeName)}()"
     case _ => s"(${translate(value)} as ${KotlinCompiler.kaitaiType2KotlinType(typeName)})"
   }
 
-  override def strToInt(s: expr, base: expr): String =
+  override def strToInt(s: expr, base: expr): String = {
     s"${translate(s)}.toLong(${translate(base)})"
+  }
 
-  override def enumToInt(v: expr, et: EnumType): String = s"${translate(v)}.id"
+  override def enumToInt(v: expr, et: EnumType): String = {
+    s"${translate(v)}.id"
+  }
 
-  override def floatToInt(v: expr): String = s"${translate(v)}.plus(0).toInt()"
+  override def floatToInt(v: expr): String = {
+    s"${translate(v)}.plus(0).toInt()"
+  }
 
-  override def intToStr(i: expr): String = s"(${translate(i)}).toString()"
+  override def intToStr(i: expr): String = {
+    s"(${translate(i)}).toString()"
+  }
 
   override def bytesToStr(bytesExpr: String, encoding: String): String = encoding match {
     case "UTF-8" =>
       s"$bytesExpr.decodeToString(throwOnInvalidSequence = true)"
     case _ =>
       // Kotlin Native supports only UTF-8 at the moment
-      s"throw UnsupportedOperationException(\"Unimplemented encoding for bytesToStr: $encoding)"
+      s"\"\".also { throw UnsupportedOperationException(\"Unimplemented encoding for bytesToStr: $encoding\") }"
   }
 
-  override def bytesLength(b: Ast.expr): String = s"${translate(b, METHOD_PRECEDENCE)}.size"
+  override def bytesLength(b: Ast.expr): String = {
+    s"${translate(b, METHOD_PRECEDENCE)}.size"
+  }
 
-  override def bytesSubscript(container: Ast.expr, idx: Ast.expr): String =
+  override def bytesSubscript(container: Ast.expr, idx: Ast.expr): String = {
     s"${translate(container, METHOD_PRECEDENCE)}[${translate(idx)}]"
+  }
 
-  override def bytesFirst(b: Ast.expr): String = s"${translate(b, METHOD_PRECEDENCE)}.first()"
+  override def bytesFirst(b: Ast.expr): String = {
+    s"${translate(b, METHOD_PRECEDENCE)}.first()"
+  }
 
-  override def bytesLast(b: Ast.expr): String = s"${translate(b, METHOD_PRECEDENCE)}.last()"
+  override def bytesLast(b: Ast.expr): String = {
+    s"${translate(b, METHOD_PRECEDENCE)}.last()"
+  }
 
-  override def bytesMin(b: Ast.expr): String = s"${translate(b)}.min()"
+  override def bytesMin(b: Ast.expr): String = {
+    s"${translate(b)}.min()"
+  }
 
-  override def bytesMax(b: Ast.expr): String = s"${translate(b)}.max()"
+  override def bytesMax(b: Ast.expr): String = {
+    s"${translate(b)}.max()"
+  }
 
-  override def strLength(s: expr): String = s"${translate(s, METHOD_PRECEDENCE)}.length"
+  override def strLength(s: expr): String = {
+    s"${translate(s, METHOD_PRECEDENCE)}.length"
+  }
 
-  override def strReverse(s: expr): String = s"${translate(s, METHOD_PRECEDENCE)}.reversed()"
+  override def strReverse(s: expr): String = {
+    s"${translate(s, METHOD_PRECEDENCE)}.reversed()"
+  }
 
-  override def strSubstring(s: expr, from: expr, to: expr): String =
+  override def strSubstring(s: expr, from: expr, to: expr): String = {
     s"${translate(s, METHOD_PRECEDENCE)}.substring(${translate(from)}, ${translate(to)})"
+  }
 
-  override def arrayFirst(a: expr): String = s"${translate(a, METHOD_PRECEDENCE)}.first()"
+  override def arrayFirst(a: expr): String = {
+    s"${translate(a, METHOD_PRECEDENCE)}.first()"
+  }
 
-  override def arrayLast(a: expr): String = s"${translate(a, METHOD_PRECEDENCE)}.last()"
+  override def arrayLast(a: expr): String = {
+    s"${translate(a, METHOD_PRECEDENCE)}.last()"
+  }
 
-  override def arraySize(a: expr): String = s"${translate(a, METHOD_PRECEDENCE)}.size"
+  override def arraySize(a: expr): String = {
+    s"${translate(a, METHOD_PRECEDENCE)}.size"
+  }
 
-  override def arrayMin(a: Ast.expr): String = s"${translate(a)}.min()"
+  override def arrayMin(a: Ast.expr): String = {
+    s"${translate(a)}.min()"
+  }
 
-  override def arrayMax(a: Ast.expr): String = s"${translate(a)}.max()"
+  override def arrayMax(a: Ast.expr): String = {
+    s"${translate(a)}.max()"
+  }
 
   override def binOp(op: Ast.operator): String = op match {
     case Ast.operator.Add => "+"
@@ -148,11 +224,20 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
     case Ast.operator.Mult => "*"
     case Ast.operator.Div => "/"
     case Ast.operator.Mod => "%"
-    case Ast.operator.BitAnd => "and"
+    case Ast.operator.BitAnd => {
+      importList.add("kotlin.experimental.and")
+      "and"
+    }
     case Ast.operator.BitOr => "or"
     case Ast.operator.BitXor => "xor"
-    case Ast.operator.LShift => "shl"
-    case Ast.operator.RShift => "shr"
+    case Ast.operator.LShift => {
+      importList.add("io.kaitai.struct.shl")
+      "shl"
+    }
+    case Ast.operator.RShift => {
+      importList.add("io.kaitai.struct.shr")
+      "shr"
+    }
     case _ => super.binOp(op)
   }
 }
