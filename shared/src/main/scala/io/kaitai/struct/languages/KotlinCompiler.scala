@@ -20,7 +20,6 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     with UniversalDoc
     with AllocateIOLocalVar
     with FixedContentsUsingArrayByteLiteral
-    with SwitchIfOps
     with NoNeedForFullClassPath {
 
   val translator = new KotlinTranslator(typeProvider, importList)
@@ -72,7 +71,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       "class "
     }
 
-    out.puts(s"${typeDescStr}${type2class(name)}: $kstructName {")
+    out.puts(s"${typeDescStr}${type2class(name)} : $kstructName {")
     out.inc
 
     if (config.readStoresPos) {
@@ -82,7 +81,9 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       out.puts("val _arrEnd = mutableMapOf<String, ArrayList<Int>>()")
       out.puts
     }
+  }
 
+  override def classFooter(name: String): Unit = {
     val isInheritedEndian = typeProvider.nowClass.meta.endian match {
       case Some(InheritedEndian) => true
       case _ => false
@@ -107,6 +108,8 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       out.dec
       out.puts("}")
     }
+
+    super.classFooter(name)
   }
 
   override def classConstructorHeader(
@@ -157,16 +160,14 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def readHeader(endian: Option[FixedEndian], isEmpty: Boolean) = {
-    val readAccessAndType = if (!config.autoRead) {
-      ""
-    } else {
-      "private"
-    }
+    val readAccessAndType = if (!config.autoRead) "" else "private "
+
     val suffix = endian match {
       case Some(e) => Utils.upperUnderscoreCase(e.toSuffix)
       case None => ""
     }
-    out.puts(s"$readAccessAndType fun _read$suffix() {")
+
+    out.puts(s"${readAccessAndType}fun _read$suffix() {")
     out.inc
   }
 
@@ -176,7 +177,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts("_read()")
 
   override def runReadCalc(): Unit = {
-    out.puts("when (bar) {")
+    out.puts("when (_is_le) {")
     out.inc
 
     out.puts(s"null -> throw $kstreamName.UndecidedEndiannessError()")
@@ -314,15 +315,9 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   //endregion io
 
   def getOrCreatePosList(listName: String, varName: String, io: String): Unit = {
-    out.puts("{")
+    out.puts("run {")
     out.inc
-    out.puts("val _posList: ArrayList<Int>? = " + listName + ".get(\"" + varName + "\")")
-    out.puts("if (_posList == null) {")
-    out.inc
-    out.puts("_posList = arrayListOf<Integer>()")
-    out.puts(listName + ".put(\"" + varName + "\", _posList)")
-    out.dec
-    out.puts("}")
+    out.puts(s"val _posList = $listName.getOrPut(\"$varName\") { arrayListOf() }")
     out.puts(s"_posList.add($io.pos())")
     out.dec
     out.puts("}")
@@ -338,7 +333,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       val name = idToStr(attrId)
       rep match {
         case NoRepeat =>
-          out.puts("_attrStart.put(\"" + name + "\", " + io + ".pos())")
+          out.puts(s"_attrStart[\"$name\"] = $io.pos()")
         case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
           getOrCreatePosList("_arrStart", name, io)
       }
@@ -358,7 +353,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     val name = idToStr(attrId)
     rep match {
       case NoRepeat =>
-        out.puts("_attrEnd.put(\"" + name + "\", " + io + ".pos())")
+        out.puts(s"_attrEnd[\"$name\"] = $io.pos()")
       case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
         getOrCreatePosList("_arrEnd", name, io)
     }
@@ -369,8 +364,9 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.inc
   }
 
-  override def condRepeatInitAttr(id: Identifier, dataType: DataType): Unit =
+  override def condRepeatInitAttr(id: Identifier, dataType: DataType): Unit = {
     out.puts(s"${privateMemberName(id)} = ${kaitaiType2KotlinType(ArrayTypeInStream(dataType))}()")
+  }
 
   override def condRepeatEosHeader(id: Identifier, io: String, dataType: DataType): Unit = {
     out.puts("{")
@@ -378,8 +374,6 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts("var i: Int = 0")
     out.puts(s"while (!$io.isEof()) {")
     out.inc
-
-    //importList.add("java.util.ArrayList")
   }
 
   override def handleAssignmentRepeatEos(id: Identifier, expr: String): Unit = {
@@ -451,7 +445,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts(s"var $id: ${kaitaiType2KotlinType(dataType)} = $expr")
 
   override def blockScopeHeader: Unit = {
-    out.puts("{")
+    out.puts("run {")
     out.inc
   }
 
@@ -573,10 +567,10 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   def value2Const(s: String) = Utils.upperUnderscoreCase(s)
 
-  override def switchRequiresIfs(onType: DataType): Boolean = onType match {
-    case _: IntType | _: EnumType | _: StrType => false
-    case _ => true
-  }
+  //  override def switchRequiresIfs(onType: DataType): Boolean = onType match {
+  //    case _: IntType | _: EnumType | _: StrType => false
+  //    case _ => true
+  //  }
 
   //<editor-fold desc="switching: true version">
 
@@ -621,11 +615,11 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   //<editor-fold desc="switching: emulation with ifs">
 
-  override def switchIfStart(id: Identifier, on: expr, onType: DataType): Unit = {
-    out.puts("{")
-    out.inc
-    out.puts(s"val ${expression(NAME_SWITCH_ON)}: ${kaitaiType2KotlinType(onType)} = ${expression(on)}")
-  }
+  //  override def switchIfStart(id: Identifier, on: expr, onType: DataType): Unit = {
+  //    out.puts("{")
+  //    out.inc
+  //    out.puts(s"val ${expression(NAME_SWITCH_ON)}: ${kaitaiType2KotlinType(onType)} = ${expression(on)}")
+  //  }
 
   def switchCmpExpr(condition: Ast.expr): String =
     expression(
@@ -636,30 +630,30 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       )
     )
 
-  override def switchIfCaseFirstStart(condition: Ast.expr): Unit = {
-    out.puts(s"if (${switchCmpExpr(condition)}) {")
-    out.inc
-  }
+  //  override def switchIfCaseFirstStart(condition: Ast.expr): Unit = {
+  //    out.puts(s"if (${switchCmpExpr(condition)}) {")
+  //    out.inc
+  //  }
+  //
+  //  override def switchIfCaseStart(condition: Ast.expr): Unit = {
+  //    out.puts(s"else if (${switchCmpExpr(condition)}) {")
+  //    out.inc
+  //  }
+  //
+  //  override def switchIfCaseEnd(): Unit = {
+  //    out.dec
+  //    out.puts("}")
+  //  }
+  //
+  //  override def switchIfElseStart(): Unit = {
+  //    out.puts("else {")
+  //    out.inc
+  //  }
 
-  override def switchIfCaseStart(condition: Ast.expr): Unit = {
-    out.puts(s"else if (${switchCmpExpr(condition)}) {")
-    out.inc
-  }
-
-  override def switchIfCaseEnd(): Unit = {
-    out.dec
-    out.puts("}")
-  }
-
-  override def switchIfElseStart(): Unit = {
-    out.puts("else {")
-    out.inc
-  }
-
-  override def switchIfEnd(): Unit = {
-    out.dec
-    out.puts("}")
-  }
+  //  override def switchIfEnd(): Unit = {
+  //    out.dec
+  //    out.puts("}")
+  //  }
 
   //</editor-fold>
 
@@ -753,6 +747,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   override def debugClassSequence(seq: List[AttrSpec]) = {
     val seqStr = seq.map((attr) => "\"" + idToStr(attr.id) + "\"").mkString(", ")
     out.puts(s"val _seqFields: Array<String> = arrayOf($seqStr)")
+    out.puts
   }
 
   override def classToString(toStringExpr: Ast.expr): Unit = {
