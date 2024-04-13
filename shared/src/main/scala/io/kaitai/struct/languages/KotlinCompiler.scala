@@ -67,7 +67,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def classHeader(name: String): Unit = {
     val typeDescStr = if (out.indentLevel > 0) {
-      "object "
+      "class "
     } else {
       "class "
     }
@@ -95,7 +95,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
         config.java.fromFileClass.nonEmpty &&
         typeProvider.nowClass.params.isEmpty
     ) {
-      out.puts(s"object Companion {")
+      out.puts(s"companion object /* 1 */ {")
       out.inc
 
       out.puts(s"fun fromFile(fileName: String): ${type2class(name)} {")
@@ -116,33 +116,41 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     isHybrid: Boolean,
     params: List[ParamDefSpec]
   ): Unit = {
-    typeProvider.nowClass.meta.endian match {
+    val hasLeVar = typeProvider.nowClass.meta.endian match {
       case Some(_: CalcEndian) | Some(InheritedEndian) =>
         out.puts("private var _is_le: Boolean? = null")
+        true
       case _ =>
-      // no _is_le variable
+        // no _is_le variable
+        false
     }
 
     val paramsArg = Utils.join(params.map((p) =>
       s"${paramName(p.id)}: ${kaitaiType2KotlinType(p.dataType)}"
-    ), ", ", ", ", "")
+    ), "", ", ", ",")
 
-    out.puts(s"constructor(_io: $kstreamName, _parent: ${kaitaiType2KotlinType(parentType)})? = null, _root: ${type2class(rootClassName)}? = null, _is_le: Boolean? = null$paramsArg) : super(_io) {")
+    out.puts("constructor(")
+    out.inc
+    out.puts(s"_io: $kstreamName,")
+    out.puts(s"_parent: ${kaitaiType2KotlinType(parentType)},")
+    out.puts(s"_root: ${type2class(rootClassName)}? = null,")
+    if (hasLeVar) out.puts(s"_is_le: Boolean? = null,")
+    if (params.nonEmpty) out.puts(paramsArg)
+    out.dec
+    out.puts(") : super(_io) {")
+
     out.inc
 
     out.puts("this._parent = _parent")
-    out.puts("this._is_le = _is_le")
+    if (hasLeVar) out.puts("this._is_le = _is_le")
 
     if (!isHybrid) {
       if (name == rootClassName) {
-        out.puts("this._root = if(_root == null) this else _root")
+        out.puts("this._root = _root ?: this")
       } else {
         out.puts("this._root = _root")
       }
     }
-
-    out.dec
-    out.puts("}")
 
     // Store parameters passed to us
     params.foreach((p) => handleAssignmentSimple(p.id, paramName(p.id)))
@@ -158,7 +166,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       case Some(e) => Utils.upperUnderscoreCase(e.toSuffix)
       case None => ""
     }
-    out.puts(s"$readAccessAndType _read$suffix() {")
+    out.puts(s"$readAccessAndType fun _read$suffix() {")
     out.inc
   }
 
@@ -655,42 +663,59 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   //</editor-fold>
 
-  override def instanceDeclaration(attrName: InstanceIdentifier, attrType: DataType, isNullable: Boolean): Unit = {
-    out.puts(s"private var ${idToStr(attrName)}: ${kaitaiType2KotlinType(attrType)}")
+  override def instanceDeclaration(
+    attrName: InstanceIdentifier,
+    attrType: DataType,
+    isNullable: Boolean
+  ): Unit = {
+    val suffix = if (isNullable) "?" else ""
+    out.puts(s"var ${idToStr(attrName)}: ${kaitaiType2KotlinType(attrType)}$suffix")
   }
 
-  override def instanceHeader(className: String, instName: InstanceIdentifier, dataType: DataType, isNullable: Boolean): Unit = {
-    out.puts(s"public fun ${idToStr(instName)}(): ${kaitaiType2KotlinType(dataType)} {")
+  override def instanceHeader(
+    className: String,
+    instName: InstanceIdentifier,
+    dataType: DataType,
+    isNullable: Boolean
+  ): Unit = {
+    val suffix = if (isNullable) "?" else ""
+    out.puts(s"fun ${idToStr(instName)}(): ${kaitaiType2KotlinType(dataType)}$suffix {")
     out.inc
   }
 
-  override def instanceCheckCacheAndReturn(instName: InstanceIdentifier, dataType: DataType): Unit = {
+  override def instanceCheckCacheAndReturn(
+    instName: InstanceIdentifier,
+    dataType: DataType
+  ): Unit = {
     out.puts(s"if (${privateMemberName(instName)} != null)")
     out.inc
     instanceReturn(instName, dataType)
     out.dec
   }
 
-  override def instanceReturn(instName: InstanceIdentifier, attrType: DataType): Unit = {
+  override def instanceReturn(
+    instName: InstanceIdentifier,
+    attrType: DataType
+  ): Unit = {
     out.puts(s"return ${privateMemberName(instName)}")
   }
 
-//  override def instanceCalculate(instName: Identifier, dataType: DataType, value: expr): Unit = {
-//    val primType = kaitaiType2KotlinType(dataType)
-//    val boxedType = kaitaiType2KotlinType(dataType)
-//
-//    if (primType != boxedType) {
-//      // Special trick to achieve both implicit type conversion + boxing.
-//      // Unfortunately, Java can't do both in one assignment, i.e. this would fail:
-//      //
-//      // Double c = 1.0f + 1;
-//
-//      out.puts(s"var _tmp: $primType = ${expression(value)} aserty $primType")
-//      out.puts(s"${privateMemberName(instName)} = _tmp")
-//    } else {
-//      out.puts(s"${privateMemberName(instName)} = ${expression(value)}")
-//    }
-//  }
+  //  override def instanceCalculate(instName: Identifier, dataType: DataType, value: expr): Unit = {
+  //    val primType = kaitaiType2KotlinType(dataType)
+  //    val boxedType = kaitaiType2KotlinType(dataType)
+  //
+  //    if (primType != boxedType) {
+  //      // Special trick to achieve both implicit type conversion + boxing.
+  //      // Unfortunately, Java can't do both in one assignment, i.e. this would fail:
+  //      //
+  //      // Double c = 1.0f + 1;
+  //
+  //      out.puts(s"var _tmp: $primType = ${expression(value)} aserty $primType")
+  //      out.puts(s"${privateMemberName(instName)} = _tmp")
+  //    } else {
+  //      out.puts(s"${privateMemberName(instName)} = ${expression(value)}")
+  //    }
+  //  }
 
   override def enumDeclaration(curClass: String, enumName: String, enumColl: Seq[(Long, String)]): Unit = {
     val enumClass = type2class(enumName)
@@ -829,8 +854,8 @@ object KotlinCompiler extends LanguageCompilerStatic
       case t: UserType => types2class(t.name)
       case EnumType(name, _) => types2class(name)
 
-      case ArrayTypeInStream(inType) => s"ArrayList<${kaitaiType2KotlinType(inType)}>"
-      case CalcArrayType(inType, _) => s"ArrayList<${kaitaiType2KotlinType(inType)}>"
+      case ArrayTypeInStream(inType) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 1 */"
+      case CalcArrayType(inType, _) => s"ArrayList<${kaitaiType2KotlinType(inType)}> /* 2 */"
 
       case st: SwitchType => kaitaiType2KotlinType(st.combinedType)
     }

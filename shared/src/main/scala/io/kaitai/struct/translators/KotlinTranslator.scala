@@ -109,7 +109,7 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
       s"$bytesExpr.decodeToString(throwOnInvalidSequence = true)"
     case _ =>
       // Kotlin Native supports only UTF-8 at the moment
-      "throw throw UnsupportedOperationException(\"Unimplemented encoding for bytesToStr: {}\", \"" + encoding + "\")"
+      s"throw UnsupportedOperationException(\"Unimplemented encoding for bytesToStr: $encoding)"
   }
 
   override def bytesLength(b: Ast.expr): String = s"${translate(b, METHOD_PRECEDENCE)}.size"
@@ -141,4 +141,18 @@ class KotlinTranslator(provider: TypeProvider, importList: ImportList) extends B
   override def arrayMin(a: Ast.expr): String = s"${translate(a)}.min()"
 
   override def arrayMax(a: Ast.expr): String = s"${translate(a)}.max()"
+
+  override def binOp(op: Ast.operator): String = op match {
+    case Ast.operator.Add => "+"
+    case Ast.operator.Sub => "-"
+    case Ast.operator.Mult => "*"
+    case Ast.operator.Div => "/"
+    case Ast.operator.Mod => "%"
+    case Ast.operator.BitAnd => "and"
+    case Ast.operator.BitOr => "or"
+    case Ast.operator.BitXor => "xor"
+    case Ast.operator.LShift => "shl"
+    case Ast.operator.RShift => "shr"
+    case _ => super.binOp(op)
+  }
 }
