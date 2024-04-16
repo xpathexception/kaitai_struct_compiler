@@ -4,7 +4,7 @@ import io.kaitai.struct.datatype.{DataType, Endianness, FixedEndian, InheritedEn
 import io.kaitai.struct.exprlang.Ast
 import io.kaitai.struct.format._
 import io.kaitai.struct.translators.AbstractTranslator
-import io.kaitai.struct.{ClassTypeProvider, RuntimeConfig}
+import io.kaitai.struct.{ClassTypeProvider, RuntimeConfig, ExternalType}
 
 import scala.collection.mutable.ListBuffer
 
@@ -75,12 +75,13 @@ abstract class LanguageCompiler(
   def fileFooter(topClassName: String): Unit = {}
 
   /**
-    * Outputs declaration of "external class", i.e. class that will be referred to in this file, but
-    * not declared here. Some languages require either a "forward declaration" in this case, or a
-    * statement to import that class, or something similar. Called once per each external class.
-    * @param classSpec
+    * Outputs declaration of "external type", i.e. class or enum that will be referred to in this
+    * file, but not declared here. Some languages require either a "forward declaration" in this
+    * case, or a statement to import that class, or something similar. Called once per each external
+    * type.
+    * @param name absolute path to the type in KS notation (lower underscore)
     */
-  def externalClassDeclaration(classSpec: ClassSpec): Unit = {}
+  def externalTypeDeclaration(extType: ExternalType): Unit = {}
 
   def classDoc(name: List[String], doc: DocSpec): Unit = {}
   def classHeader(name: List[String]): Unit

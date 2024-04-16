@@ -19,7 +19,7 @@ class ClassCompiler(
 
   override def compile: CompileLog.SpecSuccess = {
     lang.fileHeader(topClassName.head)
-    compileExternalClasses(topClass)
+    compileExternalTypes(topClass)
     compileClass(topClass)
     lang.fileFooter(topClassName.head)
 
@@ -29,9 +29,9 @@ class ClassCompiler(
     )
   }
 
-  def compileExternalClasses(topClass: ClassSpec) = {
-    TypeProcessor.getExternalClasses(topClass).foreach((classSpec) =>
-      lang.externalClassDeclaration(classSpec)
+  def compileExternalTypes(topClass: ClassSpec) = {
+    TypeProcessor.getExternalTypes(topClass).foreach((extType) =>
+      lang.externalTypeDeclaration(extType)
     )
   }
 
@@ -50,18 +50,6 @@ class ClassCompiler(
 
     // Forward declarations for recursive types
     curClass.types.foreach { case (typeName, _) => lang.classForwardDeclaration(List(typeName)) }
-
-    // Forward declarations for params which reference types external to this type
-    curClass.params.foreach((paramDefSpec) =>
-      paramDefSpec.dataType match {
-        case ut: UserType =>
-          if (ut.isExternal(curClass)) {
-            val externalTypeName = ut.classSpec.get.name
-            lang.classForwardDeclaration(externalTypeName)
-          }
-        case _ => // no forward declarations needed
-      }
-    )
 
     if (lang.innerEnums)
       compileEnums(curClass)

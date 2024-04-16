@@ -232,6 +232,7 @@ object DataType {
     override def isOwning: Boolean = false
   }
 
+  /** Represents `_parent: false` expression which means that type explicitly has no parent. */
   val USER_TYPE_NO_PARENT = Ast.expr.Bool(false)
 
   case object AnyType extends DataType
@@ -252,6 +253,16 @@ object DataType {
 
   case class EnumType(name: List[String], basedOn: IntType) extends DataType {
     var enumSpec: Option[EnumSpec] = None
+
+    /**
+      * Determines whether the enum represented by this `EnumType` instance
+      * is external from the perspective of the given `ClassSpec` in which it is
+      * used (via `seq`, `instances` or `params`).
+      * @param curClass class spec from which the local/external relationship
+      * should be evaluated
+      */
+    def isExternal(curClass: ClassSpec): Boolean =
+      enumSpec.get.isExternal(curClass)
   }
 
   case class SwitchType(

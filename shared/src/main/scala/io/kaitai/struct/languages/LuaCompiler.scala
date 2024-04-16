@@ -1,6 +1,6 @@
 package io.kaitai.struct.languages
 
-import io.kaitai.struct.{ClassTypeProvider, RuntimeConfig, Utils}
+import io.kaitai.struct.{ClassTypeProvider, RuntimeConfig, Utils, ExternalType}
 import io.kaitai.struct.datatype.{DataType, FixedEndian, InheritedEndian, KSError, ValidationNotEqualError}
 import io.kaitai.struct.datatype.DataType._
 import io.kaitai.struct.exprlang.Ast
@@ -32,8 +32,8 @@ class LuaCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   override def outImports(topClass: ClassSpec) =
     importList.toList.mkString("", "\n", "\n")
 
-  override def externalClassDeclaration(classSpec: ClassSpec): Unit =
-    importList.add("require(\"" + classSpec.name.head + "\")")
+  override def externalTypeDeclaration(extType: ExternalType): Unit =
+    importList.add("require(\"" + extType.name.head + "\")")
 
   override def fileHeader(topClassName: String): Unit = {
     outHeader.puts(s"-- $headerComment")

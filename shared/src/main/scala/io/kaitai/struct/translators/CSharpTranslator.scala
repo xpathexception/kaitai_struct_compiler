@@ -5,12 +5,12 @@ import io.kaitai.struct.datatype.DataType
 import io.kaitai.struct.datatype.DataType._
 import io.kaitai.struct.exprlang.Ast
 import io.kaitai.struct.exprlang.Ast._
-import io.kaitai.struct.format.Identifier
+import io.kaitai.struct.format.{EnumSpec, Identifier}
 import io.kaitai.struct.languages.CSharpCompiler
 
 class CSharpTranslator(provider: TypeProvider, importList: ImportList) extends BaseTranslator(provider) {
   override def doArrayLiteral(t: DataType, value: Seq[expr]): String = {
-    val nativeType = CSharpCompiler.kaitaiType2NativeType(t)
+    val nativeType = CSharpCompiler.kaitaiType2NativeType(importList, t)
     val commaStr = value.map((v) => translate(v)).mkString(", ")
 
     importList.add("System.Collections.Generic")
@@ -61,10 +61,10 @@ class CSharpTranslator(provider: TypeProvider, importList: ImportList) extends B
   override def doInternalName(id: Identifier): String =
     s"${CSharpCompiler.publicMemberName(id)}"
 
-  override def doEnumByLabel(enumTypeAbs: List[String], label: String): String =
-    s"${enumClass(enumTypeAbs)}.${Utils.upperCamelCase(label)}"
-  override def doEnumById(enumTypeAbs: List[String], id: String): String =
-    s"((${enumClass(enumTypeAbs)}) $id)"
+  override def doEnumByLabel(enumSpec: EnumSpec, label: String): String =
+    s"${enumClass(enumSpec.name)}.${Utils.upperCamelCase(label)}"
+  override def doEnumById(enumSpec: EnumSpec, id: String): String =
+    s"((${enumClass(enumSpec.name)}) $id)"
 
   def enumClass(enumTypeAbs: List[String]): String = {
     val enumTypeRel = Utils.relClass(enumTypeAbs, provider.nowClass.name)
@@ -89,7 +89,7 @@ class CSharpTranslator(provider: TypeProvider, importList: ImportList) extends B
   override def doIfExp(condition: expr, ifTrue: expr, ifFalse: expr): String =
     s"(${translate(condition)} ? ${translate(ifTrue)} : ${translate(ifFalse)})"
   override def doCast(value: Ast.expr, typeName: DataType): String =
-    s"((${CSharpCompiler.kaitaiType2NativeType(typeName)}) (${translate(value)}))"
+    s"((${CSharpCompiler.kaitaiType2NativeType(importList, typeName)}) (${translate(value)}))"
 
   // Predefined methods of various types
   override def strToInt(s: expr, base: expr): String = {

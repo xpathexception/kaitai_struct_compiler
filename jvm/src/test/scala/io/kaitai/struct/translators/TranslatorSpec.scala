@@ -1014,12 +1014,12 @@ class TranslatorSpec extends AnyFunSpec {
         CSharpCompiler -> new CSharpTranslator(tp, new ImportList()),
         GoCompiler -> new GoTranslator(goOutput, tp, new ImportList()),
         JavaCompiler -> new JavaTranslator(tp, new ImportList()),
-        JavaScriptCompiler -> new JavaScriptTranslator(tp),
+        JavaScriptCompiler -> new JavaScriptTranslator(tp, new ImportList()),
         KotlinCompiler -> new KotlinTranslator(tp, new ImportList()),
         LuaCompiler -> new LuaTranslator(tp, new ImportList()),
         PerlCompiler -> new PerlTranslator(tp, new ImportList()),
         PHPCompiler -> new PHPTranslator(tp, RuntimeConfig()),
-        PythonCompiler -> new PythonTranslator(tp, new ImportList()),
+        PythonCompiler -> new PythonTranslator(tp, new ImportList(), RuntimeConfig()),
         RubyCompiler -> new RubyTranslator(tp)
       )
 

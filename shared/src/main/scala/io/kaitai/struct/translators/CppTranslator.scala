@@ -7,7 +7,7 @@ import io.kaitai.struct.datatype.DataType
 import io.kaitai.struct.datatype.DataType._
 import io.kaitai.struct.exprlang.Ast
 import io.kaitai.struct.exprlang.Ast.expr
-import io.kaitai.struct.format.Identifier
+import io.kaitai.struct.format.{EnumSpec, Identifier}
 import io.kaitai.struct.languages.CppCompiler
 import io.kaitai.struct.languages.components.CppImportList
 import io.kaitai.struct.{RuntimeConfig, Utils}
@@ -101,7 +101,7 @@ class CppTranslator(provider: TypeProvider, importListSrc: CppImportList, import
   override def doArrayLiteral(t: DataType, values: Seq[expr]): String = {
     if (config.cppConfig.useListInitializers) {
       importListHdr.addSystem("vector")
-      val cppElType = CppCompiler.kaitaiType2NativeType(config.cppConfig, t)
+      val cppElType = CppCompiler.kaitaiType2NativeType(config.cppConfig, importListHdr, t)
       val rawInit = s"new std::vector<$cppElType>{" + values.map((value) => translate(value)).mkString(", ") + "}"
       config.cppConfig.pointers match {
         case RawPointers =>
@@ -140,11 +140,16 @@ class CppTranslator(provider: TypeProvider, importListSrc: CppImportList, import
   override def doInternalName(id: Identifier): String =
     s"${CppCompiler.publicMemberName(id)}()"
 
-  override def doEnumByLabel(enumType: List[String], label: String): String =
-    CppCompiler.types2class(enumType.dropRight(1)) + "::" +
-      Utils.upperUnderscoreCase(enumType.last + "_" + label)
-  override def doEnumById(enumType: List[String], id: String): String =
-    s"static_cast<${CppCompiler.types2class(enumType)}>($id)"
+  override def doEnumByLabel(enumSpec: EnumSpec, label: String): String = {
+    val isExternal = enumSpec.isExternal(provider.nowClass)
+    if (isExternal) {
+      importListHdr.addLocal(CppCompiler.outFileNameHeader(enumSpec.name.head))
+    }
+    CppCompiler.types2class(enumSpec.name.dropRight(1)) + "::" +
+      Utils.upperUnderscoreCase(enumSpec.name.last + "_" + label)
+  }
+  override def doEnumById(enumSpec: EnumSpec, id: String): String =
+    s"static_cast<${CppCompiler.types2class(enumSpec.name)}>($id)"
 
   override def doStrCompareOp(left: Ast.expr, op: Ast.cmpop, right: Ast.expr) = {
     if (op == Ast.cmpop.Eq) {
@@ -161,7 +166,7 @@ class CppTranslator(provider: TypeProvider, importListSrc: CppImportList, import
   override def doIfExp(condition: expr, ifTrue: expr, ifFalse: expr): String =
     s"((${translate(condition)}) ? (${translate(ifTrue)}) : (${translate(ifFalse)}))"
   override def doCast(value: Ast.expr, typeName: DataType): String =
-    s"static_cast<${CppCompiler.kaitaiType2NativeType(config.cppConfig, typeName)}>(${translate(value)})"
+    s"static_cast<${CppCompiler.kaitaiType2NativeType(config.cppConfig, importListHdr, typeName)}>(${translate(value)})"
 
   // Predefined methods of various types
   override def strToInt(s: expr, base: expr): String = {

@@ -46,9 +46,6 @@ class CppCompiler(
   var accessMode: AccessMode = PublicAccess
 
   override def indent: String = "    "
-  def typeToFileName(topClassName: String): String = topClassName
-  def outFileNameSource(className: String): String = typeToFileName(className) + ".cpp"
-  def outFileNameHeader(className: String): String = typeToFileName(className) + ".h"
 
   override def fileHeader(topClassName: String): Unit = {
     outSrcHeader.puts(s"// $headerComment")
@@ -64,6 +61,16 @@ class CppCompiler(
     }
     outHdrHeader.puts
     outHdrHeader.puts(s"// $headerComment")
+    outHdrHeader.puts
+    // Forward declaration of the top-level class defined later in this header
+    // file. It's important to do this before printing `importListHdr` because
+    // it contains `#include`s of header files of external .ksy modules that
+    // could circularly import this header file (which does nothing because of
+    // header guards, though, so if the other header files that tried to include
+    // this one refer to our top-level class by name, which is very likely, then
+    // we need to ensure that the C++ compiler has already seen the following
+    // forward declaration).
+    outHdrHeader.puts(s"class ${type2class(topClassName)};")
     outHdrHeader.puts
 
     importListHdr.addKaitai("kaitai/kaitaistruct.h")
@@ -108,10 +115,8 @@ class CppCompiler(
     }
   }
 
-  override def externalClassDeclaration(classSpec: ClassSpec): Unit = {
-    classForwardDeclaration(classSpec.name)
-    importListHdr.addLocal(outFileNameHeader(classSpec.name.head))
-  }
+  override def externalTypeDeclaration(extType: ExternalType): Unit =
+    importListHdr.addLocal(outFileNameHeader(extType.name.head))
 
   override def classHeader(name: List[String]): Unit = {
     val className = types2class(List(name.last))
@@ -948,7 +953,7 @@ class CppCompiler(
   override def type2class(className: String): String = CppCompiler.type2class(className)
 
   def kaitaiType2NativeType(attrType: DataType, absolute: Boolean = false): String =
-    CppCompiler.kaitaiType2NativeType(config.cppConfig, attrType, absolute)
+    CppCompiler.kaitaiType2NativeType(config.cppConfig, importListHdr, attrType, absolute)
 
   def nullPtr: String = config.cppConfig.pointers match {
     case RawPointers => "0"
@@ -1020,6 +1025,10 @@ object CppCompiler extends LanguageCompilerStatic
     config: RuntimeConfig
   ): LanguageCompiler = new CppCompiler(tp, config)
 
+  def typeToFileName(topClassName: String): String = topClassName
+  def outFileNameSource(className: String): String = typeToFileName(className) + ".cpp"
+  def outFileNameHeader(className: String): String = typeToFileName(className) + ".h"
+
   def idToStr(id: Identifier): String =
     id match {
       case SpecialIdentifier(name) => Utils.lowerUnderscoreCase(name)
@@ -1035,7 +1044,7 @@ object CppCompiler extends LanguageCompilerStatic
   override def kstructName = "kaitai::kstruct"
   override def kstreamName = "kaitai::kstream"
 
-  def kaitaiType2NativeType(config: CppRuntimeConfig, attrType: DataType, absolute: Boolean = false): String = {
+  def kaitaiType2NativeType(config: CppRuntimeConfig, importListHdr: CppImportList, attrType: DataType, absolute: Boolean = false): String = {
     attrType match {
       case Int1Type(false) => "uint8_t"
       case IntMultiType(false, Width2, _) => "uint16_t"
@@ -1078,11 +1087,16 @@ object CppCompiler extends LanguageCompilerStatic
           t.name
         })
 
-      case ArrayTypeInStream(inType) => config.pointers match {
-        case RawPointers => s"std::vector<${kaitaiType2NativeType(config, inType, absolute)}>*"
-        case UniqueAndRawPointers => s"std::unique_ptr<std::vector<${kaitaiType2NativeType(config, inType, absolute)}>>"
+      case at: ArrayType => {
+        importListHdr.addSystem("vector")
+        val vecType = s"std::vector<${kaitaiType2NativeType(config, importListHdr, at.elType, absolute)}>"
+        (at, config.pointers) match {
+          case (_: ArrayTypeInStream, UniqueAndRawPointers) =>
+            s"std::unique_ptr<$vecType>"
+          case _ =>
+            s"$vecType*"
+        }
       }
-      case CalcArrayType(inType, _) => s"std::vector<${kaitaiType2NativeType(config, inType, absolute)}>*"
       case OwnedKaitaiStreamType => config.pointers match {
         case RawPointers => s"$kstreamName*"
         case UniqueAndRawPointers => s"std::unique_ptr<$kstreamName>"
@@ -1095,7 +1109,7 @@ object CppCompiler extends LanguageCompilerStatic
       case CalcKaitaiStructType(_) => s"$kstructName*"
 
       case st: SwitchType =>
-        kaitaiType2NativeType(config, combineSwitchType(st), absolute)
+        kaitaiType2NativeType(config, importListHdr, combineSwitchType(st), absolute)
     }
   }
 
