@@ -61,6 +61,15 @@ case class JavaRuntimeConfig(
   endOfStreamErrorClass: String = "java.nio.BufferUnderflowException",
 )
 
+case class KotlinRuntimeConfig(
+  fromFileClass: String = "io.kaitai.struct.OkioKaitaiStream",
+  endOfStreamErrorClass: String = "okio.EOFException",
+
+  kotlinPackage: String = "",
+  eosException: String = "EOFException",
+  eosExceptionImport: String = "okio.EOFException",
+)
+
 /**
   * Runtime configuration of the compiler which controls certain aspects of
   * code generation for target languages.
@@ -101,6 +110,7 @@ case class RuntimeConfig(
   cppConfig: CppRuntimeConfig = CppRuntimeConfig(),
   goPackage: String = "",
   java: JavaRuntimeConfig = JavaRuntimeConfig(),
+  kotlin: KotlinRuntimeConfig = KotlinRuntimeConfig(),
   dotNetNamespace: String = "Kaitai",
   phpNamespace: String = "",
   pythonPackage: String = "",

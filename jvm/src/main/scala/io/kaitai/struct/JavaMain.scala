@@ -99,10 +99,12 @@ object JavaMain {
 
       opt[String]("java-package") valueName("<package>") action { (x, c) =>
         c.copy(runtime = c.runtime.copy(java = c.runtime.java.copy(javaPackage = x)))
+        c.copy(runtime = c.runtime.copy(kotlin = c.runtime.kotlin.copy(kotlinPackage = x)))
       } text("Java package (Java only, default: root package)")
 
       opt[String]("java-from-file-class") valueName("<class>") action { (x, c) =>
         c.copy(runtime = c.runtime.copy(java = c.runtime.java.copy(fromFileClass = x)))
+        c.copy(runtime = c.runtime.copy(kotlin = c.runtime.kotlin.copy(fromFileClass = x)))
       } text(s"Java class to be invoked in fromFile() helper (default: ${RuntimeConfig().java.fromFileClass})")
 
       opt[String]("dotnet-namespace") valueName("<namespace>") action { (x, c) =>
