@@ -314,19 +314,19 @@ class ClassCompiler(
     lang.instanceHeader(className, instName, dataType, instSpec.isNullable)
     if (lang.innerDocstrings)
       compileInstanceDoc(instName, instSpec)
-    lang.instanceCheckCacheAndReturn(instName, dataType)
+    lang.instanceCheckCacheAndReturn(instName, dataType, instSpec.isNullable)
 
     instSpec match {
       case vi: ValueInstanceSpec =>
         lang.attrParseIfHeader(instName, vi.ifExpr)
-        lang.instanceCalculate(instName, dataType, vi.value)
+        lang.instanceCalculate(instName, dataType, vi.value, instSpec.isNullable)
         lang.attrParseIfFooter(vi.ifExpr)
         lang.instanceSetCalculated(instName)
       case pi: ParseInstanceSpec =>
         lang.attrParse(pi, instName, endian)
     }
 
-    lang.instanceReturn(instName, dataType)
+    lang.instanceReturn(instName, dataType, instSpec.isNullable)
     lang.instanceFooter
   }
 

@@ -1,11 +1,14 @@
 package io.kaitai.struct.translators
 
-import io.kaitai.struct.{ImportList, Utils}
 import io.kaitai.struct.datatype.DataType
+import io.kaitai.struct.datatype.DataType._
 import io.kaitai.struct.exprlang.Ast
+import io.kaitai.struct.exprlang.Ast.expr
 import io.kaitai.struct.format.{EnumSpec, Identifier}
 import io.kaitai.struct.languages.KotlinCompiler
-import io.kaitai.struct.languages.KotlinCompiler.enumIdKotlinType
+import io.kaitai.struct.languages.KotlinCompiler.{enumIdKotlinType, kotlinTypeOf}
+import io.kaitai.struct.precompile.TypeMismatchError
+import io.kaitai.struct.{ImportList, Utils}
 
 class KotlinTranslator(
   provider: TypeProvider,
@@ -17,12 +20,89 @@ class KotlinTranslator(
     s"(if (${translate(condition)}) ${translate(ifTrue)} else ${translate(ifFalse)})"
   }
 
+  override def doCast(value: expr, typeName: DataType): String = {
+    (detectType(value), typeName) match {
+      case (l: NumericType, r: NumericType) => {
+        if (l == r) return translate(value)
+
+        s"${translate(value, METHOD_PRECEDENCE)}${castExpression(r)}"
+      }
+      case (l: EnumType, r: EnumType) => translate(value)
+      case _ => s"(${translate(value, METHOD_PRECEDENCE)} as ${kotlinTypeOf(typeName)}) /* generic cast */"
+    }
+  }
+
+  def castExpression(t: NumericType): String = {
+    t match {
+      case int1: Int1Type => if (int1.signed) ".toIntS1()" else ".toIntU1()"
+      case intMulti: IntMultiType => {
+        val sign = if (intMulti.signed) "S" else "U"
+        val width = s"${intMulti.width.width}"
+
+        s".toInt$sign$width()"
+      }
+      case CalcIntType => ".toIntC()"
+      case CalcFloatType => ".toFloatC()"
+      case BitsType(_, _) => ".toIntS8()"
+      case FloatMultiType(Width4, _) => ".toFloat()"
+      case FloatMultiType(Width8, _) => ".toDouble()"
+      case _ => s"/* todo: cast numeric to ${t} */"
+    }
+  }
+
+  override def detectTypeRaw(v: expr): DataType = {
+    v match {
+      case Ast.expr.IntNum(n) => {
+        if (n >= 0 && n <= 127) {
+          Int1Type(true)
+        } else if (n > 127 && n <= 255) {
+          Int1Type(false)
+        } else if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
+          IntMultiType(signed = false, Width8, None)
+        } else {
+          IntMultiType(signed = true, Width4, None)
+        }
+      }
+      case Ast.expr.UnaryOp(op: Ast.unaryop, v: Ast.expr) => {
+        val t = detectType(v)
+        (t, op) match {
+          case (IntMultiType(_, _, _), Ast.unaryop.Minus | Ast.unaryop.Invert) => t
+          case (t: IntType, Ast.unaryop.Minus | Ast.unaryop.Invert) => t
+          case (_: FloatType, Ast.unaryop.Minus) => t
+          case (_: BooleanType, Ast.unaryop.Not) => t
+          case _ => throw new TypeMismatchError(s"unable to apply unary operator $op to $t")
+        }
+      }
+      case Ast.expr.BinOp(left: Ast.expr, op: Ast.operator, right: Ast.expr) => {
+        (detectType(left), detectType(right), op) match {
+          case (ltype: IntType, rtype: IntType, _) => ltype
+          case (ltype: NumericType, rtype: NumericType, _) => ltype
+          case (_: StrType, _: StrType, Ast.operator.Add) => CalcStrType
+          case (ltype, rtype, _) =>
+            throw new TypeMismatchError(s"can't apply operator $op to $ltype and $rtype")
+        }
+      }
+
+      case _ => super.detectTypeRaw(v)
+    }
+  }
+
   override def doName(s: String): String = s match {
     case Identifier.ITERATOR => "_it"
     case Identifier.ITERATOR2 => "_buf"
     case Identifier.SWITCH_ON => "on"
     case Identifier.INDEX => "i"
-    case _ => KotlinCompiler.escapeHardKeyword(Utils.lowerCamelCase(s))
+    case _ => s"${KotlinCompiler.escapeHardKeyword(Utils.lowerCamelCase(s))}()"
+  }
+
+  override def doNumericCompareOp(left: expr, op: Ast.cmpop, right: expr): String = {
+    (detectType(left), detectType(right)) match {
+      case (ltype: NumericType, rtype: NumericType) => {
+        val ctype = TypeDetector.combineTypes(ltype, rtype)
+        s"${doCast(left, ctype)} ${cmpOp(op)} ${doCast(right, ctype)} /* nmcmp $left ~ $right */"
+      }
+      case _ => super.doNumericCompareOp(left, op, right) + "/* nmcmp-2 */"
+    }
   }
 
   override def doInternalName(id: Identifier): String = {
@@ -75,15 +155,43 @@ class KotlinTranslator(
 
   //region Literal
 
+  override def strLiteralGenericCC(code: Char): String = {
+    strLiteralUnicode(code)
+  }
+
+  override def strLiteralUnicode(code: Char): String = {
+    "\\u%04x".format(code.toInt)
+  }
+
+  override val asciiCharQuoteMap: Map[Char, String] = Map(
+    '\t' -> "\\t",
+    '\n' -> "\\n",
+    '\r' -> "\\r",
+    '"' -> "\\\"",
+    '\\' -> "\\\\",
+
+    '\b' -> "\\b",
+    '\'' -> "\\\'",
+    '$' -> "\\$",
+  )
+
+  override def doIntLiteral(n: BigInt): String = {
+    if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
+      n.toString + "U"
+    } else {
+      super.doIntLiteral(n)
+    }
+  }
+
   override def doFloatLiteral(n: Any): String = {
-    s"${super.doFloatLiteral(n)}f"
+    s"${super.doFloatLiteral(n)}"
   }
 
   override def doArrayLiteral(t: DataType, value: Seq[Ast.expr]): String = {
     val kotlinType = KotlinCompiler.kotlinTypeOf(t)
     val commaStr = value.map(v => translate(v)).mkString(", ")
 
-    s"arrayListOf<$kotlinType>($commaStr)"
+    s"arrayListOf($commaStr)"
   }
 
   override def doByteArrayLiteral(arr: Seq[Byte]): String = {
@@ -130,6 +238,7 @@ class KotlinTranslator(
   }
 
   //endregion String
+
   //region Array
 
   override def doBytesCompareOp(left: Ast.expr, op: Ast.cmpop, right: Ast.expr): String = {
