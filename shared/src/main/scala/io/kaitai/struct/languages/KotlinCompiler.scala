@@ -362,11 +362,13 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       }
       case ProcessRotate(isLeft, rotValue) => {
         val expr = if (isLeft) {
-          expression(rotValue)
+          rotValue
         } else {
-          s"8 - (${expression(rotValue)})"
+          Ast.expr.BinOp(Ast.expr.IntNum(8), Ast.operator.Sub, rotValue)
         }
-        s"$kstreamName.processRotateLeft($srcExpr, $expr, 1)"
+        val targetType = IntMultiType(signed = true, Width4, None)
+
+        s"$kstreamName.processRotateLeft($srcExpr, ${translator.doCast(expr, targetType)}, 1)"
       }
       case ProcessCustom(name, args) => {
         val namespace = name.init.mkString(".")
@@ -589,7 +591,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     val onType = translator.detectType(on)
     typeProvider._currentSwitchType = Some(onType)
 
-    out.puts(s"when (${expression(on)}) {")
+    out.puts(s"when (${translator.doCast(on, onType)}) {")
     out.inc
   }
 

@@ -3,7 +3,8 @@ package io.kaitai.struct.translators
 import io.kaitai.struct.datatype.DataType
 import io.kaitai.struct.datatype.DataType._
 import io.kaitai.struct.exprlang.Ast
-import io.kaitai.struct.exprlang.Ast.expr
+import io.kaitai.struct.exprlang.Ast.expr.IntNum
+import io.kaitai.struct.exprlang.Ast.{expr, operator}
 import io.kaitai.struct.format.{EnumSpec, Identifier}
 import io.kaitai.struct.languages.KotlinCompiler
 import io.kaitai.struct.languages.KotlinCompiler.{enumIdKotlinType, kotlinTypeOf}
@@ -23,11 +24,15 @@ class KotlinTranslator(
   override def doCast(value: expr, typeName: DataType): String = {
     (detectType(value), typeName) match {
       case (l: NumericType, r: NumericType) => {
-        if (l == r) return translate(value)
-
-        s"${translate(value, METHOD_PRECEDENCE)}${castExpression(r)}"
+        if (value.isInstanceOf[IntNum]) {
+          s"${translate(value, METHOD_PRECEDENCE)}${castExpression(r)}"
+        } else if (l == r) {
+          translate(value, METHOD_PRECEDENCE)
+        } else {
+          s"${translate(value, METHOD_PRECEDENCE)}${castExpression(r)}"
+        }
       }
-      case (l: EnumType, r: EnumType) => translate(value)
+      case (l: EnumType, r: EnumType) => translate(value, METHOD_PRECEDENCE)
       case _ => s"(${translate(value, METHOD_PRECEDENCE)} as ${kotlinTypeOf(typeName)}) /* generic cast */"
     }
   }
@@ -53,7 +58,7 @@ class KotlinTranslator(
   override def detectTypeRaw(v: expr): DataType = {
     v match {
       case Ast.expr.IntNum(n) => {
-        if (n >= 0 && n <= 127) {
+        if (n >= -128 && n <= 127) {
           Int1Type(true)
         } else if (n > 127 && n <= 255) {
           Int1Type(false)
@@ -67,7 +72,19 @@ class KotlinTranslator(
         val t = detectType(v)
         (t, op) match {
           case (IntMultiType(_, _, _), Ast.unaryop.Minus | Ast.unaryop.Invert) => t
-          case (t: IntType, Ast.unaryop.Minus | Ast.unaryop.Invert) => t
+          case (t: IntType, Ast.unaryop.Minus | Ast.unaryop.Invert) => {
+            val size = t match {
+              case Int1Type(signed) => 1
+              case IntMultiType(signed, width, endian) => width.width
+              case BitsType(width, bitEndian) => width
+            }
+
+            if (size <= 4) {
+              IntMultiType(signed = true, Width4, None)
+            } else {
+              IntMultiType(signed = true, Width8, None)
+            }
+          }
           case (_: FloatType, Ast.unaryop.Minus) => t
           case (_: BooleanType, Ast.unaryop.Not) => t
           case _ => throw new TypeMismatchError(s"unable to apply unary operator $op to $t")
@@ -75,7 +92,7 @@ class KotlinTranslator(
       }
       case Ast.expr.BinOp(left: Ast.expr, op: Ast.operator, right: Ast.expr) => {
         (detectType(left), detectType(right), op) match {
-          case (ltype: IntType, rtype: IntType, _) => ltype
+          case (ltype: IntType, rtype: IntType, _) => calculateBinaryOpType(ltype, rtype, op)
           case (ltype: NumericType, rtype: NumericType, _) => ltype
           case (_: StrType, _: StrType, Ast.operator.Add) => CalcStrType
           case (ltype, rtype, _) =>
@@ -84,6 +101,40 @@ class KotlinTranslator(
       }
 
       case _ => super.detectTypeRaw(v)
+    }
+  }
+
+  def calculateBinaryOpType(ltype: IntType, rtype: IntType, op: Ast.operator): IntType = {
+    if (ltype == CalcIntType || rtype == CalcIntType) return CalcIntType
+
+    val lsize = ltype match {
+      case Int1Type(signed) => 1
+      case IntMultiType(signed, width, endian) => width.width
+      case BitsType(width, bitEndian) => width
+    }
+
+    val rsize = ltype match {
+      case Int1Type(signed) => 1
+      case IntMultiType(signed, width, endian) => width.width
+      case BitsType(width, bitEndian) => width
+    }
+
+    val smallTypes = lsize < 4 && rsize < 4
+    val has8Type = lsize == 8 || rsize == 8
+
+    op match {
+      case operator.Add | operator.Sub | operator.Mult | operator.Div | operator.Mod => {
+        if (smallTypes) {
+          IntMultiType(signed = false, Width4, None)
+        } else if (has8Type) {
+          IntMultiType(signed = false, Width8, None)
+        } else {
+          IntMultiType(signed = false, Width4, None)
+        }
+      }
+      case operator.LShift | operator.RShift | operator.BitOr | operator.BitXor | operator.BitAnd => {
+        ltype
+      }
     }
   }
 
@@ -99,7 +150,7 @@ class KotlinTranslator(
     (detectType(left), detectType(right)) match {
       case (ltype: NumericType, rtype: NumericType) => {
         val ctype = TypeDetector.combineTypes(ltype, rtype)
-        s"${doCast(left, ctype)} ${cmpOp(op)} ${doCast(right, ctype)} /* nmcmp $left ~ $right */"
+        s"${doCast(left, ctype)} ${cmpOp(op)} ${doCast(right, ctype)} /* nmcmp $ltype ~ $rtype */"
       }
       case _ => super.doNumericCompareOp(left, op, right) + "/* nmcmp-2 */"
     }
@@ -178,7 +229,11 @@ class KotlinTranslator(
   override def doIntLiteral(n: BigInt): String = {
     if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
       n.toString + "U"
-    } else {
+    }
+//    else if (n < 0) {
+//      s"(${super.doIntLiteral(n)})"
+//    }
+    else {
       super.doIntLiteral(n)
     }
   }
