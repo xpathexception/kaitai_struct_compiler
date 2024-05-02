@@ -230,9 +230,6 @@ class KotlinTranslator(
     if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
       n.toString + "U.toLong()"
     }
-//    else if (n < 0) {
-//      s"(${super.doIntLiteral(n)})"
-//    }
     else {
       super.doIntLiteral(n)
     }
@@ -254,6 +251,14 @@ class KotlinTranslator(
       case b if b > 127 => s"$b.toByte()"
       case b if b < -128 => s"($b).toByte()"
       case b => s"$b"
+    }.mkString(", ")
+
+    s"byteArrayOf($args)"
+  }
+
+  override def doByteArrayNonLiteral(elts: Seq[expr]): String = {
+    val args = elts.map { (e) =>
+      doCast(e, Int1Type(true))
     }.mkString(", ")
 
     s"byteArrayOf($args)"

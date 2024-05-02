@@ -811,7 +811,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
     val enumClass = type2class(enumName)
     out.puts
-    out.puts(s"enum class $enumClass(val id: ${enumIdKotlinType()}) {")
+    out.puts(s"enum class $enumClass(override val id: ${enumIdKotlinType()}): IdentifiableEnum {")
     out.inc
 
     if (enumColl.size > 1) {

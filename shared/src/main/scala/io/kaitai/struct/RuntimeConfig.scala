@@ -66,7 +66,7 @@ case class KotlinRuntimeConfig(
   endOfStreamErrorClass: String = "okio.EOFException",
 
   kotlinPackage: String = "",
-  eosException: String = "EOFException",
+  eosException: String = "okio.EOFException",
   eosExceptionImport: String = "okio.EOFException",
 )
 
