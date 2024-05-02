@@ -170,7 +170,7 @@ class KotlinTranslator(
   }
 
   override def doEnumById(enumSpec: EnumSpec, id: String): String = {
-    s"${enumClassNameFrom(enumSpec.name)}.byId($id.to${enumIdKotlinType()}())"
+    s"${enumClassNameFrom(enumSpec.name)}.byId(($id).to${enumIdKotlinType()}())"
   }
 
   override def floatToInt(value: Ast.expr): String = {
@@ -228,7 +228,7 @@ class KotlinTranslator(
 
   override def doIntLiteral(n: BigInt): String = {
     if (n > Long.MaxValue && n <= Utils.MAX_UINT64) {
-      n.toString + "U"
+      n.toString + "U.toLong()"
     }
 //    else if (n < 0) {
 //      s"(${super.doIntLiteral(n)})"

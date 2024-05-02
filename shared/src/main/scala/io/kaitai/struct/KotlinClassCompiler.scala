@@ -36,7 +36,7 @@ class KotlinClassCompiler(
 
     compileInstances(curClass)
 
-    // todo: curClass.toStringExpr.foreach(expr => lang.classToString(expr))
+    curClass.toStringExpr.foreach(expr => lang.classToString(expr))
 
     compileSubclasses(curClass)
     provider.nowClass = curClass

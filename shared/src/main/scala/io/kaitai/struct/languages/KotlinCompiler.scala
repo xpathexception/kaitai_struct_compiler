@@ -55,6 +55,66 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts(s"/* $result */")
   }
 
+  def getOrCreatePosList(listName: String, varName: String, io: String): Unit = {
+    out.puts("run {")
+    out.inc
+    out.puts(s"val _posList = $listName.getOrPut(\"$varName\") { arrayListOf() }")
+    out.puts(s"_posList.add($io.pos)")
+    out.dec
+    out.puts("}")
+  }
+
+  override def attrDebugStart(
+    attrId: Identifier,
+    attrType: DataType,
+    ios: Option[String],
+    rep: RepeatSpec
+  ): Unit = {
+    ios.foreach { (io) =>
+      val name = idToStr(attrId)
+      rep match {
+        case NoRepeat =>
+          out.puts(s"_attrStart[\"$name\"] = $io.pos")
+        case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
+          getOrCreatePosList("_arrStart", name, io)
+      }
+    }
+  }
+
+  override def attrDebugArrInit(attrName: Identifier, attrType: DataType): Unit = {
+    // no _debug[$name]['arr'] initialization needed in Java
+  }
+
+  override def attrDebugEnd(
+    attrId: Identifier,
+    attrType: DataType,
+    io: String,
+    rep: RepeatSpec
+  ): Unit = {
+    val name = idToStr(attrId)
+    rep match {
+      case NoRepeat =>
+        out.puts(s"_attrEnd[\"$name\"] = $io.pos")
+      case _: RepeatExpr | RepeatEos | _: RepeatUntil =>
+        getOrCreatePosList("_arrEnd", name, io)
+    }
+  }
+
+  override def debugClassSequence(seq: List[AttrSpec]) = {
+    val seqStr = seq.map((attr) => "\"" + idToStr(attr.id) + "\"").mkString(", ")
+    out.puts(s"val _seqFields: Array<String> = arrayOf($seqStr)")
+    out.puts
+  }
+
+  override def userTypeDebugRead(id: String, dataType: DataType, assignType: DataType): Unit = {
+    val expr = if (assignType != dataType) {
+      s"($id as ${kotlinTypeOf(dataType)})"
+    } else {
+      id
+    }
+    out.puts(s"$expr._read() /* userTypeDebugRead */")
+  }
+
   //endregion Debug
 
   //region Naming
@@ -164,6 +224,14 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     }
 
     out.puts("override fun _parent() = requireNotNull(_parent)")
+
+    if (config.readStoresPos) {
+      out.puts("val _attrStart = mutableMapOf<String, Long>()")
+      out.puts("val _attrEnd = mutableMapOf<String, Long>()")
+      out.puts("val _arrStart = mutableMapOf<String, ArrayList<Long>>()")
+      out.puts("val _arrEnd = mutableMapOf<String, ArrayList<Long>>()")
+      out.puts
+    }
   }
 
   override def classConstructorFooter: Unit = {}
@@ -189,6 +257,15 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.dec
     out.puts("}")
     out.puts
+  }
+
+  override def classToString(toStringExpr: Ast.expr): Unit = {
+    out.puts
+    out.puts("override fun toString(): String {")
+    out.inc
+    out.puts(s"return ${translator.translate(toStringExpr)}")
+    out.dec
+    out.puts("}")
   }
 
   def companionObject(): Unit = {
@@ -298,7 +375,6 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       out.puts(s"/* isNullable: $isNullable */")
     }
 
-    val name = idToStr(attrName)
     val (prefix, suffix) = (isPrimitiveType(attrType), isNullable) match {
       case (false, false) => ("lateinit ", "")
       case (false, true) => ("", "? = null")
@@ -309,7 +385,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       case (true, true) => ("", "? = null")
     }
 
-    out.puts(s"private ${prefix}var $name: ${kotlinTypeOf(attrType)}$suffix")
+    out.puts(s"private ${prefix}var ${publicMemberName(attrName)}: ${kotlinTypeOf(attrType)}$suffix")
   }
 
   /**
@@ -322,8 +398,10 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     isNullable: Boolean
   ): Unit = {
     printDebugMethodName()
-    val reader = if (!isNullable) s"${idToStr(attrName)}" else s"requireNotNull(${idToStr(attrName)})"
-    out.puts(s"fun ${idToStr(attrName)}(): ${kotlinTypeOf(attrType)} = $reader")
+
+    val name = publicMemberName(attrName)
+    val reader = if (!isNullable) s"$name" else s"requireNotNull($name)"
+    out.puts(s"fun $name(): ${kotlinTypeOf(attrType)} = $reader")
   }
 
   override def attrParseHybrid(leProc: () => Unit, beProc: () => Unit): Unit = {
@@ -385,7 +463,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   def getRawIdExpr(varName: Identifier, rep: RepeatSpec): String = {
-    val memberName = s"${idToStr(varName)}()"
+    val memberName = s"${publicMemberName(varName)}()"
     rep match {
       case NoRepeat => memberName
       case _ => s"$memberName[$memberName.size - 1]"
@@ -535,26 +613,26 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def instanceDeclaration(attrName: InstanceIdentifier, attrType: DataType, isNullable: Boolean): Unit = {
     //attributeDeclaration(attrName, attrType, isNullable)
-    out.puts(s"private var ${idToStr(attrName)}: ${kotlinTypeOf(attrType)}? = null")
+    out.puts(s"private var ${publicMemberName(attrName)}: ${kotlinTypeOf(attrType)}? = null")
     out.puts(s"private var ${calculatedFlagForName(attrName)} = false")
   }
 
   override def instanceHeader(className: String, instName: InstanceIdentifier, dataType: DataType, isNullable: Boolean): Unit = {
     val nullInit = if (isNullable) "?" else ""
-    out.puts(s"fun ${idToStr(instName)}(): ${kotlinTypeOf(dataType)}$nullInit {")
+    out.puts(s"fun ${publicMemberName(instName)}(): ${kotlinTypeOf(dataType)}$nullInit {")
     out.inc
   }
 
   override def instanceCheckCacheAndReturn(instName: InstanceIdentifier, dataType: DataType, isNullable: Boolean): Unit = {
     if (!isNullable) {
-      out.puts(s"if (${calculatedFlagForName(instName)}) { return requireNotNull(${idToStr(instName)}) }")
+      out.puts(s"if (${calculatedFlagForName(instName)}) { return requireNotNull(${privateMemberName(instName)}) }")
     } else {
       instanceCheckCacheAndReturn(instName, dataType)
     }
   }
 
   override def instanceCheckCacheAndReturn(instName: InstanceIdentifier, dataType: DataType): Unit = {
-    out.puts(s"if (${calculatedFlagForName(instName)}) { return ${idToStr(instName)} }")
+    out.puts(s"if (${calculatedFlagForName(instName)}) { return ${privateMemberName(instName)} }")
   }
 
   override def instanceCalculate(instName: Identifier, dataType: DataType, value: expr): Unit = {
@@ -686,7 +764,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
           t.args.map((a) => translator.translate(a))
         } else {
           t.classSpec.get.params.lazyZip(t.args).map((param, arg) =>
-            idToStr(param.id) + " = " + translator.doCast(arg, param.dataType)
+            publicMemberName(param.id) + " = " + translator.doCast(arg, param.dataType)
           )
         }
 
