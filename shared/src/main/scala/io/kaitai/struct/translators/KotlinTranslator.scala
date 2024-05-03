@@ -277,8 +277,8 @@ class KotlinTranslator(
   }
 
   override def bytesToStr(bytesExpr: String, encoding: String): String = encoding match {
-    case "UTF-8" =>
-      s"$bytesExpr.decodeToString(throwOnInvalidSequence = true)"
+    case "ASCII" | "UTF-8" | "UTF-16LE" | "UTF-16BE" | "ISO-8859-1" =>
+      s"$bytesExpr.decodeToString(throwOnInvalidSequence = true, encoding = \"$encoding\")"
     case _ =>
       // Kotlin Native supports only UTF-8 at the moment
       // Render error as astring template to allow implicit type inferring in some contexts

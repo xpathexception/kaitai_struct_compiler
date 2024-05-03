@@ -1,6 +1,7 @@
 package io.kaitai.struct
 
 import io.kaitai.struct.datatype.DataType.CalcUserType
+import io.kaitai.struct.datatype.InheritedEndian
 import io.kaitai.struct.format.{AttrSpec, ClassSpec, ClassSpecs, MemberSpec, ParentIdentifier, RootIdentifier}
 import io.kaitai.struct.languages.KotlinCompiler
 import io.kaitai.struct.languages.components.ExtraAttrs
@@ -32,6 +33,8 @@ class KotlinClassCompiler(
     compileAttrDeclarations(allAttrs)
     compileAttrReaders(allAttrs)
 
+    if (lang.config.autoRead) lang.runRead(curClass.name)
+
     compileEagerRead(curClass.seq, curClass.meta.endian)
 
     compileInstances(curClass)
@@ -45,5 +48,19 @@ class KotlinClassCompiler(
 
     kotlinlang.companionObject()
     lang.classFooter(curClass.name)
+  }
+
+  override def compileConstructor(curClass: ClassSpec): Unit = {
+    lang.classConstructorHeader(
+      curClass.name,
+      curClass.parentType,
+      topClassName,
+      curClass.meta.endian.contains(InheritedEndian),
+      curClass.params
+    )
+    compileInit(curClass)
+    curClass.instances.foreach { case (instName, _) => lang.instanceClear(instName) }
+
+    lang.classConstructorFooter
   }
 }
