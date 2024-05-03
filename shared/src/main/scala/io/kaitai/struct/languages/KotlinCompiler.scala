@@ -29,6 +29,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     out.puts("run {")
     out.inc
   }
+
   override def blockScopeFooter: Unit = universalFooter
 
   //region Debug
@@ -760,7 +761,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
         //        val params = t.args.map((a) => translator.translate(a))
         //        val addParams = Utils.join(names.lazyZip(params).map((k, v) => s"$k = $v"), ", ", ", ", "")
 
-        val computed = if(t.isExternal(typeProvider.nowClass)) {
+        val computed = if (t.isExternal(typeProvider.nowClass)) {
           t.args.map((a) => translator.translate(a))
         } else {
           t.classSpec.get.params.lazyZip(t.args).map((param, arg) =>
@@ -811,27 +812,31 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
     val enumClass = type2class(enumName)
     out.puts
-    out.puts(s"enum class $enumClass(override val id: ${enumIdKotlinType()}): IdentifiableEnum {")
+    out.puts(s"open class $enumClass(override val id: ${enumIdKotlinType()}): IdentifiableEnum {")
     out.inc
 
-    if (enumColl.size > 1) {
-      enumColl.dropRight(1).foreach { case (id, label) =>
-        out.puts(s"${valueName2Const(label)}(${translator.doIntLiteral(id)}),")
-      }
+    enumColl.foreach { case (id, label) =>
+      out.puts(s"data object ${valueName2Const(label)} : $enumClass(${translator.doIntLiteral(id)})")
     }
-    enumColl.last match {
-      case (id, label) =>
-        out.puts(s"${valueName2Const(label)}(${translator.doIntLiteral(id)});")
-    }
+
+    out.puts(s"data class UNKNOWN(override val id: ${enumIdKotlinType()}) : $enumClass(id)")
 
     out.puts
 
     out.puts("companion object {")
     out.inc
 
-    out.puts(s"private val byId: Map<${enumIdKotlinType()}, $enumClass> = entries.associateBy { it.id }")
-    out.puts
-    out.puts(s"fun byId(id: ${enumIdKotlinType()}): $enumClass = byId.getValue(id)")
+    out.puts(s"fun byId(id: ${enumIdKotlinType()}): $enumClass = when (id) {")
+    out.inc
+
+    enumColl.foreach { case (_, label) =>
+      out.puts(s"${valueName2Const(label)}.id -> ${valueName2Const(label)}")
+    }
+
+    out.puts(s"else -> UNKNOWN(id)")
+
+    out.dec
+    out.puts("}")
 
     out.dec
     out.puts("}")
