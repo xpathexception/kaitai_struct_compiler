@@ -29,9 +29,9 @@ class KotlinClassCompiler(
     )
 
     // Attributes declarations and readers
-    val allAttrs: List[MemberSpec] = curClass.seq ++ curClass.params ++ ExtraAttrs.forClassSpec(curClass, lang)
+    val allAttrs: List[MemberSpec] = curClass.seq ++ ExtraAttrs.forClassSpec(curClass, lang)
     compileAttrDeclarations(allAttrs)
-    compileAttrReaders(allAttrs)
+    compileAttrReaders(allAttrs ++ curClass.params)
 
     if (lang.config.autoRead) lang.runRead(curClass.name)
 

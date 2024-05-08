@@ -213,7 +213,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
     for (p <- params) {
       if (printDebugLogs) out.puts(s"/* $p */")
-      out.puts(s"${paramName(p.id)}: ${kotlinTypeOf(p.dataType)},")
+      out.puts(s"private val ${paramName(p.id)}: ${kotlinTypeOf(p.dataType)},")
     }
 
     out.dec
