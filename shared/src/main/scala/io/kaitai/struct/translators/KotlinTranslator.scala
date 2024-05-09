@@ -204,6 +204,23 @@ class KotlinTranslator(
     case _ => super.binOp(op)
   }
 
+  override def genericBinOp(
+    left: Ast.expr,
+    op: Ast.operator,
+    right: Ast.expr,
+    extPrec: Int
+  ): String = {
+    (detectType(left), detectType(right), op) match {
+      case (_: IntType, _: IntType, Ast.operator.Mod) => {
+        importList.add("io.kaitai.struct.typing.*")
+        s"${translate(left, METHOD_PRECEDENCE)} modPositive ${translate(right, METHOD_PRECEDENCE)}"
+      }
+      case _ => {
+        super.genericBinOp(left, op, right, extPrec)
+      }
+    }
+  }
+
   //region Literal
 
   override def strLiteralGenericCC(code: Char): String = {
@@ -276,13 +293,8 @@ class KotlinTranslator(
     s"${translate(value, METHOD_PRECEDENCE)}.toString()"
   }
 
-  override def bytesToStr(bytesExpr: String, encoding: String): String = encoding match {
-    case "ASCII" | "UTF-8" | "UTF-16LE" | "UTF-16BE" | "ISO-8859-1" =>
+  override def bytesToStr(bytesExpr: String, encoding: String): String = {
       s"$bytesExpr.decodeToString(throwOnInvalidSequence = true, encoding = \"$encoding\")"
-    case _ =>
-      // Kotlin Native supports only UTF-8 at the moment
-      // Render error as astring template to allow implicit type inferring in some contexts
-      s"\"$${error(\"Unimplemented encoding for bytesToStr: $encoding\")}\""
   }
 
   override def strLength(s: Ast.expr): String = {
@@ -328,8 +340,18 @@ class KotlinTranslator(
     s"${translate(a, METHOD_PRECEDENCE)}.min()"
   }
 
+  override def bytesMin(a: Ast.expr): String = {
+    importList.add("io.kaitai.struct.typing.*")
+    s"${translate(a, METHOD_PRECEDENCE)}.minByte()"
+  }
+
   override def arrayMax(a: Ast.expr): String = {
     s"${translate(a, METHOD_PRECEDENCE)}.max()"
+  }
+
+  override def bytesMax(a: Ast.expr): String = {
+    importList.add("io.kaitai.struct.typing.*")
+    s"${translate(a, METHOD_PRECEDENCE)}.maxByte()"
   }
 
   override def arraySubscript(container: Ast.expr, idx: Ast.expr): String = {

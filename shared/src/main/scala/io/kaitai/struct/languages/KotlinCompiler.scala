@@ -670,7 +670,12 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     val onType = translator.detectType(on)
     typeProvider._currentSwitchType = Some(onType)
 
-    out.puts(s"when (${translator.doCast(on, onType)}) {")
+    if (onType.isInstanceOf[BytesType]) {
+      out.puts(s"val ${Identifier.SWITCH_ON} = ${translator.doCast(on, onType)}")
+      out.puts(s"when {")
+    } else {
+      out.puts(s"when (${translator.doCast(on, onType)}) {")
+    }
     out.inc
   }
 
@@ -683,10 +688,17 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     }
 
     if (printDebugLogs) {
-      out.puts(s"/* condition = $condition, conditionType = $onType */")
+      out.puts(
+        s"/* condition = $condition, " +
+          s"whenType = ${typeProvider.currentSwitchType}, " +
+          s"condType = ${translator.detectType(condition)} */")
     }
 
-    out.puts(s"${translator.doCast(condition, onType)} -> {")
+    if (onType.isInstanceOf[BytesType]) {
+      out.puts(s"${translator.doCast(condition, onType)}.contentEquals(${Identifier.SWITCH_ON}) -> {")
+    } else {
+      out.puts(s"${translator.doCast(condition, onType)} -> {")
+    }
     out.inc
   }
 
