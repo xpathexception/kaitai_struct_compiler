@@ -34,7 +34,7 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   //region Debug
 
-  def printDebugLogs: Boolean = true
+  def printDebugLogs: Boolean = false
 
   private def getDebugMethodName(): String = {
     val stackTrace = Thread.currentThread().getStackTrace
@@ -613,12 +613,14 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def instanceDeclaration(attrName: InstanceIdentifier, attrType: DataType, isNullable: Boolean): Unit = {
+    printDebugMethodName()
     //attributeDeclaration(attrName, attrType, isNullable)
     out.puts(s"private var ${publicMemberName(attrName)}: ${kotlinTypeOf(attrType)}? = null")
     out.puts(s"private var ${calculatedFlagForName(attrName)} = false")
   }
 
   override def instanceHeader(className: String, instName: InstanceIdentifier, dataType: DataType, isNullable: Boolean): Unit = {
+    printDebugMethodName()
     val nullInit = if (isNullable) "?" else ""
     out.puts(s"fun ${publicMemberName(instName)}(): ${kotlinTypeOf(dataType)}$nullInit {")
     out.inc

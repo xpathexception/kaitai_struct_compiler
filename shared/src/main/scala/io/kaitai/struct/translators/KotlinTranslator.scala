@@ -33,7 +33,7 @@ class KotlinTranslator(
         }
       }
       case (l: EnumType, r: EnumType) => translate(value, METHOD_PRECEDENCE)
-      case _ => s"(${translate(value, METHOD_PRECEDENCE)} as ${kotlinTypeOf(typeName)}) /* generic cast */"
+      case _ => s"(${translate(value, METHOD_PRECEDENCE)} as ${kotlinTypeOf(typeName)})"
     }
   }
 
@@ -150,9 +150,9 @@ class KotlinTranslator(
     (detectType(left), detectType(right)) match {
       case (ltype: NumericType, rtype: NumericType) => {
         val ctype = TypeDetector.combineTypes(ltype, rtype)
-        s"${doCast(left, ctype)} ${cmpOp(op)} ${doCast(right, ctype)} /* nmcmp $ltype ~ $rtype */"
+        s"${doCast(left, ctype)} ${cmpOp(op)} ${doCast(right, ctype)}"
       }
-      case _ => super.doNumericCompareOp(left, op, right) + "/* nmcmp-2 */"
+      case _ => super.doNumericCompareOp(left, op, right)
     }
   }
 
