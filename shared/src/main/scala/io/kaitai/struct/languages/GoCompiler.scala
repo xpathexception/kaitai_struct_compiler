@@ -301,7 +301,7 @@ class GoCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   }
 
   override def condRepeatEosHeader(id: Identifier, io: String, dataType: DataType): Unit = {
-    out.puts(s"for i := 1;; i++ {")
+    out.puts(s"for i := 0;; i++ {")
     out.inc
 
     val eofVar = translator.allocateLocalVar()
@@ -539,9 +539,16 @@ class GoCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
 
   override def idToStr(id: Identifier): String = GoCompiler.idToStr(id)
 
-  override def publicMemberName(id: Identifier): String = GoCompiler.publicMemberName(id)
+  override def publicMemberName(id: Identifier): String =
+    id match {
+      case IoIdentifier => "_IO"
+      case RootIdentifier => "_Root"
+      case ParentIdentifier => "_Parent"
+      case InstanceIdentifier(name) => Utils.upperCamelCase(name)
+      case _ => idToStr(id)
+    }
 
-  override def privateMemberName(id: Identifier): String = s"this.${idToStr(id)}"
+  override def privateMemberName(id: Identifier): String = GoCompiler.privateMemberName(id)
 
   override def localTemporaryName(id: Identifier): String = s"_t_${idToStr(id)}"
 
@@ -601,14 +608,7 @@ object GoCompiler extends LanguageCompilerStatic
       case IoStorageIdentifier(innerId) => s"_io_${idToStr(innerId)}"
     }
 
-  def publicMemberName(id: Identifier): String =
-    id match {
-      case IoIdentifier => "_IO"
-      case RootIdentifier => "_Root"
-      case ParentIdentifier => "_Parent"
-      case InstanceIdentifier(name) => Utils.upperCamelCase(name)
-      case _ => idToStr(id)
-    }
+  def privateMemberName(id: Identifier): String = s"this.${idToStr(id)}"
 
   /**
     * Determine Go data type corresponding to a KS data type.
