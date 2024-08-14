@@ -801,8 +801,8 @@ class KotlinCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
   override def bytesPadTermExpr(
     expr0: String,
     padRight: Option[Int],
-    terminator: Option[Int],
-    include: Boolean,
+    terminator: Option[Seq[Byte]],
+    include: Boolean
   ): String = {
     printDebugMethodName()
 
