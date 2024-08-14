@@ -327,7 +327,12 @@ class LuaCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
     case _: BytesEosType =>
       s"$io:read_bytes_full()"
     case BytesTerminatedType(terminator, include, consume, eosError, _) =>
-      s"$io:read_bytes_term($terminator, $include, $consume, $eosError)"
+      if (terminator.length == 1) {
+        val term = terminator.head & 0xff
+        s"$io:read_bytes_term($term, $include, $consume, $eosError)"
+      } else {
+        s"$io:read_bytes_term_multi(${translator.doByteArrayLiteral(terminator)}, $include, $consume, $eosError)"
+      }
     case BitsType1(bitEndian) =>
       s"$io:read_bits_int_${bitEndian.toSuffix}(1) ~= 0"
     case BitsType(width: Int, bitEndian) =>
@@ -350,13 +355,19 @@ class LuaCompiler(typeProvider: ClassTypeProvider, config: RuntimeConfig)
       }
       s"${types2class(t.classSpec.get.name)}($addParams$io$addArgs)"
   }
-  override def bytesPadTermExpr(expr0: String, padRight: Option[Int], terminator: Option[Int], include: Boolean): String = {
+  override def bytesPadTermExpr(expr0: String, padRight: Option[Int], terminator: Option[Seq[Byte]], include: Boolean): String = {
     val expr1 = padRight match {
       case Some(padByte) => s"$kstreamName.bytes_strip_right($expr0, $padByte)"
       case None => expr0
     }
     val expr2 = terminator match {
-      case Some(term) => s"$kstreamName.bytes_terminate($expr1, $term, $include)"
+      case Some(term) =>
+        if (term.length == 1) {
+          val t = term.head & 0xff
+          s"$kstreamName.bytes_terminate($expr1, $t, $include)"
+        } else {
+          s"$kstreamName.bytes_terminate_multi($expr1, ${translator.doByteArrayLiteral(term)}, $include)"
+        }
       case None => expr1
     }
     expr2
